@@ -15,6 +15,7 @@ tracing = "0.1"
 figment = { version = "0.10", features = ["toml"] }
 toml = "0.8"
 dirs = "5"
+chrono = { version = "0.4", features = ["serde"] }
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }
@@ -26,3 +27,4 @@ assert_cmd = "2"
 assert_fs = "1"
 insta = "1"
 predicates = "3"
+proptest = "1"

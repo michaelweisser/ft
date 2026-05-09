@@ -11,6 +11,9 @@ tracing = { workspace = true }
 figment = { workspace = true }
 toml = { workspace = true }
 dirs = { workspace = true }
+chrono = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }
+insta = { workspace = true }
+proptest = { workspace = true }

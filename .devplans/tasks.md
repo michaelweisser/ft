@@ -582,3 +582,13 @@ once we hit a real case where the user wants it.
 model & UX"; "Testing" (real-vault test).
 
 **Outcome:** 
+### Session 9 · 2026-05-09 · done
+**Goal:** Task model + emoji-format parser + serializer + round-trip property tests
+
+**Outcome:** `Task` struct with all planned fields; `Status`/`Priority` enums; `TaskFormat` trait
+with `ParseContext`; `EmojiFormat` implementing the full Obsidian Tasks emoji format. Parser
+detects field boundaries using date-validity checks (so `📅 today` stays in the description).
+Space-preserving raw_trailing accumulator retains post-field comment content byte-for-byte.
+`resolve_hierarchy` wires parent pointers by indent level. 73 unit + proptest tests green.
+Real-vault smoke test: 4,674 tasks parsed, 0 unexpected round-trip mismatches (11 trailing-space
+and 1 unknown-status artifacts are documented, expected behavior). Clippy clean, fmt clean.
