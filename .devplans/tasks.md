@@ -214,3 +214,364 @@ moment.js format uses tokens we don't support, with a pointer to the doc.
 - Anything UI beyond the CLI (TUI = plan 002)
 
 ## Sessions
+### Session 1 · 2026-05-09 · planned
+**Goal:** Cargo workspace + vault discovery + layered config + `ft vault info`
+
+**Scope:**
+- Cargo workspace with `ft` (binary) and `ft-core` (library) members
+- `rust-toolchain.toml` pinning a recent stable; `rustfmt.toml`, `clippy.toml`
+- Top-level `Cargo.toml` with the dependency stack agreed in the plan
+- `ft-core::vault` module: `Vault::discover()` with full precedence chain
+  (flag > `FT_VAULT` env > walk up from CWD > user config default)
+- `ft-core::config` module: layered loading from `~/.config/ft/config.toml`
+  and `<vault>/.ft/config.toml` using `figment`; per-vault wins
+- Config schema (serde structs) with sensible defaults; unknown keys
+  preserved (round-trip safe) or rejected with a clear error — pick one and
+  document
+- Error types via `thiserror` in lib; `anyhow` + `Context` in binary
+- `tracing` + `tracing-subscriber` set up; `-v` flag wired up in clap
+- `ft vault info` subcommand prints resolved vault path, all config files in
+  effect (with their precedence ranking), and the merged config
+
+**Tests:**
+- Unit tests for discovery precedence (each rung of the chain) using
+  `assert_fs` to build temp directory trees
+- Unit test for config layering (user-only, vault-only, merged, conflict
+  resolution)
+- Integration test: `ft vault info` against the `tiny/` fixture vault
+- First fixture vault committed at `tests/fixtures/tiny/` — empty `.obsidian/`
+  marker file plus a couple of markdown files; just enough to exercise
+  discovery
+
+**Done means:**
+- `cargo build --release` produces a working `ft` binary
+- `cargo test --workspace` passes
+- `cargo clippy --workspace -- -D warnings` clean
+- `cargo fmt --check` clean
+- `ft vault info` works against the real `/Users/cmw/git/fortytwo` vault and
+  prints something useful
+
+**Advances acceptance criteria:** all of "Workspace & project skeleton",
+all of "Vault discovery & config", parts of "Error model & UX" (thiserror /
+anyhow split, `-v` flag, vault-relative paths in errors).
+
+**Deferred:** task parsing, scanning, any `tasks` subcommand. The README is
+deferred to session 8 (we'll have something concrete to document by then).
+
+**Outcome:** 
+
+### Session 2 · 2026-05-09 · planned
+**Goal:** Task model + emoji-format parser + serializer + round-trip property tests
+
+**Scope:**
+- `ft-core::task` module:
+  - `Task` struct with all fields enumerated in the plan
+  - `Status` enum (Open, Done, InProgress, Cancelled) with parse/display
+  - `Priority` enum (Highest, High, Medium, Low, Lowest) with the matching
+    plugin emojis
+  - `raw_trailing` field to preserve unknown emojis/fields verbatim
+- `TaskFormat` trait with `parse_line(line, ctx) -> Option<Task>` and
+  `serialize_line(&Task) -> String`
+- `task::emoji` module: full emoji-format implementation
+- `task::hierarchy`: helper that takes a `Vec<Task>` from one file (with
+  `source_line`/`indent_level`) and resolves `parent` pointers for subtasks
+- Logging warnings via `tracing` for unknown status markers (parsed as Open)
+
+**Tests:**
+- Unit tests for each emoji field's parser and serializer in isolation
+- Snapshot tests (`insta`) over a corpus of real task lines copied from the
+  fortytwo vault into `tests/fixtures/tiny/sample-tasks.md`
+- Proptest round-trip: `for_all_tasks: parse(serialize(t)) == t`
+- Proptest preservation: `for_all_lines: serialize(parse(line)) == line`
+  byte-for-byte (where `parse` returns `Some`)
+- Subtask hierarchy test: 3+ levels deep, mixed statuses
+- Pathological cases: blank description, all emojis, no emojis, weird
+  whitespace, embedded brackets in description, unicode, long line
+
+**Done means:**
+- The library can parse every task in the real fortytwo vault without losing
+  data on round-trip (run as a one-off check, not committed as a test)
+- All tests pass, no clippy warnings, no flaky proptest cases
+- The trait shape supports a hypothetical dataview impl without any change
+  to consumers (write a stub `task::dataview` module returning
+  `unimplemented!()` to prove the seams are right; remove the stub at end
+  of session if too noisy)
+
+**Advances acceptance criteria:** all of "Task model (library)".
+
+**Deferred:** scanning multiple files (next session), dataview format
+(future plan), recurrence semantic parsing (session 6 — we just preserve
+the string here).
+
+**Outcome:** 
+
+### Session 3 · 2026-05-09 · planned
+**Goal:** Parallel vault scan + `ft tasks list` with flag filters + table/JSON output
+
+**Scope:**
+- `ft-core::vault::scan()` walks markdown files via `ignore` (respects
+  `.gitignore` + `ignored_paths` from config)
+- `rayon` parallelism over the file list; per-file errors collected, not
+  fatal; returns `(Vec<Task>, Vec<ScanError>)`
+- Default exclusions: `.obsidian/`, `.git/`, `attachments/` (configurable)
+- `ft tasks list` clap subcommand with flag filters: `--status`,
+  `--priority`, `--tag` (repeatable), `--path`, `--due-before`,
+  `--due-after`, `--scheduled-before`, `--scheduled-after`, `--has-due`,
+  `--no-due`
+- `ft-core::query::filter` programmatic API that takes typed filters and
+  returns matching tasks
+- Output formats: `table` (default, via `comfy-table`, terminal-width
+  aware) and `json` (full `Task` structure)
+- Color output via `owo-colors` (TTY/`NO_COLOR`-aware) — table only
+- Default sort: due asc, priority desc, path
+
+**Tests:**
+- Snapshot tests (`insta`) for table and JSON output against the `tiny/`
+  fixture
+- Add `tests/fixtures/realistic/` (~30 notes, PARA-shaped, mix of done /
+  open / overdue / future tasks)
+- Snapshot tests for each filter flag in isolation against `realistic/`
+- Test that `.gitignore` is respected
+- Test that one malformed task file does not abort the scan and is
+  reported in the error list
+- Microbench (criterion or just `Instant` in a `#[ignore]` test) on
+  `realistic/` to track scan time
+
+**Done means:**
+- `ft tasks list` works against the real fortytwo vault and produces
+  reasonable output
+- All flag filters covered by snapshot tests
+- Scan is parallel (visible in CPU usage on `realistic/`)
+- JSON output is parseable by `jq` (test in shell from CI script)
+
+**Advances acceptance criteria:** all of "Vault scanning"; first half of
+"`ft tasks list`" (flags, table, JSON, default sort); parts of "Testing"
+(realistic fixture, snapshot tests).
+
+**Deferred:** query DSL, presets, `--sort`/`--group-by` flags, markdown
+and ndjson formats, `--allow-empty` — all session 4.
+
+**Outcome:** 
+
+### Session 4 · 2026-05-09 · planned
+**Goal:** Query DSL subset + sort/group + presets + markdown/ndjson output
+
+**Scope:**
+- `ft-core::query::dsl` parser for the supported subset:
+  - Predicates: `status is X`, `priority is X`, `path includes X`,
+    `tag is X` / `has tag X`, `due {before|after|on} <date>`,
+    `scheduled {before|after|on} <date>`, `done`, `not done`,
+    `has due`, `no due date`
+  - Boolean combinators: `and`, `or`, `not`, parens
+  - `sort by <field> [reverse]` (multi-key, comma-separated or repeated)
+  - `limit N`
+- Reject anything outside the subset with an error pointing to a specific
+  doc anchor; tested explicitly per unsupported feature
+- `--query "<DSL>"` flag composes with the existing flag filters from
+  session 3 (flags become additional `and` clauses)
+- `--sort` flag with multiple keys
+- `--group-by path|folder|due|priority|tag` — table format only
+- Built-in presets: `today`, `overdue`, `upcoming`, `done-today`
+- User-defined presets read from `presets` map in config; user definitions
+  override built-ins
+- `markdown` output format (emits source lines, pipeable back as a task
+  list); `ndjson` format
+- `--allow-empty` flag; default exit code 1 on no matches
+
+**Tests:**
+- Unit tests for DSL parser: each predicate, each combinator, error cases
+- Snapshot tests for each preset against `realistic/`
+- Snapshot tests for grouped table output
+- Add `tests/fixtures/pathological/`: deep subtasks, every emoji, weird
+  unicode, intentionally malformed lines
+- Test that flags + `--query` compose as `and`
+- Test that user preset shadows built-in
+
+**Done means:**
+- `ft tasks list "not done and due before tomorrow sort by priority"` works
+- `ft tasks list today` works against the real vault
+- All three fixture vaults exercised by snapshot tests
+
+**Advances acceptance criteria:** remainder of "`ft tasks list`"; pathological
+fixture (Testing); query DSL doc placeholder created (real doc in session 8).
+
+**Deferred:** docs prose (session 8), shell completions for preset names
+(session 8).
+
+**Outcome:** 
+
+### Session 5 · 2026-05-09 · planned
+**Goal:** `ft tasks create` + atomic writes + daily-notes resolution + date parsing + editor handoff
+
+**Scope:**
+- `ft-core::fs::write_atomic(path, content)` helper: temp file in same dir,
+  rename, preserve mode
+- `ft-core::dates` module: parse ISO + relative (`+3d`, `tomorrow`,
+  `yesterday`) + natural language (`next monday`) via `chrono` +
+  `chrono-english`; one entry point that tries each in order
+- `ft-core::daily` module: read `<vault>/.obsidian/daily-notes.json`,
+  translate the moment.js format string subset to chrono format, return
+  the resolved path for a given date; clear error on unsupported tokens
+- `ft-core::task::ops::create_task(...)` library API
+- `ft tasks create` CLI subcommand with all flags from the plan
+  (`--due`, `--scheduled`, `--start`, `--priority`, `--tag` repeatable,
+  `--recurrence`, `--id`, `--depends-on`, `--file`, `--under-heading`,
+  `--at-line`, `--append`, `--edit`, `--force`)
+- Default location: today's daily note; if missing, hard error with
+  remedy hint
+- Idempotency: refuse exact duplicate same-day unless `--force`
+- `--edit` opens `$EDITOR` at the new task's line (vim-family `+N` syntax;
+  fall back to opening the file)
+
+**Tests:**
+- Unit tests for date parsing (each form)
+- Unit tests for daily-notes path resolution: each supported moment.js
+  token; rejection of unsupported tokens
+- Atomic write: test that interruption mid-write leaves the original
+  file intact (simulate by writing to a path then panicking; assert
+  original unchanged)
+- Integration tests using `assert_fs` temp vaults: create with `--file`
+  + `--under-heading`, with `--at-line`, with `--append`; verify the
+  file content with snapshot tests
+- Test idempotency: second create with same description+date refused;
+  with `--force` it goes through
+- Round-trip: create, list, output contains the new task
+
+**Done means:**
+- `ft tasks create "buy milk" --due tomorrow --priority high` works
+  against the real fortytwo vault and lands in today's daily note
+- All flag combinations have integration test coverage
+- Atomic write is genuinely atomic on the test machine
+
+**Advances acceptance criteria:** all of "`ft tasks create`"; parts of
+"Error model & UX" (atomic writes, vault-relative paths in messages).
+
+**Deferred:** Templater integration to auto-create missing daily notes
+(future plan).
+
+**Outcome:** 
+
+### Session 6 · 2026-05-09 · planned
+**Goal:** `ft tasks complete` + selector resolution + recurrence engine (daily/weekly/monthly)
+
+**Scope:**
+- Selector parser: `<id>`, `<file>:<line>`, fall through to interactive
+  picker (`inquire` or `dialoguer`) when ambiguous and stdin is a TTY
+- `ft-core::task::ops::complete_task(...)` library API
+- `ft tasks complete <selector>` CLI with `--on <date>` and `--yes`
+- `ft-core::task::recurrence` engine:
+  - Whitelist: `every day`, `every week`, `every month`, with optional
+    `on the Nth`, `on <weekday>`, anchored to due/scheduled/start date
+  - Returns the next instance's dates; unsupported patterns produce an
+    error naming the unsupported token
+  - Matches plugin behavior on the cases in the whitelist (cross-checked
+    against the plugin's own test fixtures where possible)
+- On completion of a recurring task: write the next instance at the
+  original location, mark the current as done
+
+**Tests:**
+- Selector resolution unit tests for each form
+- Recurrence unit tests: every supported pattern × due/scheduled/start
+  anchor × edge cases (end-of-month, leap day, DST-adjacent)
+- Recurrence rejection tests: each unsupported token produces a clear
+  error with the offending substring
+- Integration test: complete a non-recurring task, verify done date set
+- Integration test: complete a recurring task, verify both old (done)
+  and new (open, next date) tasks present in the file
+- Snapshot test on the resulting file content for a few realistic
+  recurrence cases
+
+**Done means:**
+- `ft tasks complete <id>` works against the real vault
+- Recurrence engine behaves correctly on every whitelisted pattern
+- Unsupported recurrence patterns produce errors that name the token
+
+**Advances acceptance criteria:** all of "`ft tasks complete`".
+
+**Deferred:** richer recurrence (skip, until, count, etc.) — future plan
+once we hit a real case where the user wants it.
+
+**Outcome:** 
+
+### Session 7 · 2026-05-09 · planned
+**Goal:** `ft tasks move` single + bulk-move + dry-run + diff preview + confirmation
+
+**Scope:**
+- `ft-core::task::ops::move_tasks(...)` library API: takes a list of
+  resolved tasks and a target (file + optional heading); produces a plan
+  of file edits (`Vec<FileEdit>`) without writing anything
+- Apply step that takes the plan and writes atomically (per file)
+- Hierarchy preservation: when moving a task with children, the children
+  move with it; indentation is normalized to the new context
+- `ft tasks move <selector> --to <file>[#heading]` (single)
+- `ft tasks move --query "<DSL>" --to <file>[#heading]` (bulk)
+- `--dry-run` prints a unified diff per affected file (use `similar`
+  crate); no writes
+- Confirmation prompt for bulk: shows count + sample of 5 task lines;
+  bypassed by `--yes`
+- Code comment in `move_tasks` explicitly noting the deferred wikilink
+  rewriting on cross-folder moves; pointer to plan 003
+
+**Tests:**
+- Unit tests for the edit-plan builder: single task, task with children,
+  task that's mid-file, task at file end
+- Integration test: bulk-move with `--query`, snapshot the resulting
+  files
+- Test that `--dry-run` does not modify any file (compare mtimes
+  before/after)
+- Test confirmation flow with mocked stdin (`--yes` path is the
+  test-friendly one)
+- Test that moving the same task twice produces no diff on the second run
+  (idempotent under no-op)
+
+**Done means:**
+- `ft tasks move --query "tag is #legacy" --to inbox/triage.md --dry-run`
+  works on the real vault and prints a sensible diff
+- Bulk move on `realistic/` produces correct files (snapshot)
+
+**Advances acceptance criteria:** all of "`ft tasks move` and bulk move".
+
+**Deferred:** wikilink rewriting on cross-folder moves (plan 003).
+
+**Outcome:** 
+
+### Session 8 · 2026-05-09 · planned
+**Goal:** Polish — man pages, shell completions, color/`NO_COLOR`, `--json-errors`, docs, real-vault test
+
+**Scope:**
+- `clap_mangen` man page generation for `ft` and each subcommand;
+  generated into `man/`; build.rs or a `xtask` to regenerate
+- `clap_complete` for bash, zsh, fish; `ft completions <shell>`
+  subcommand emits to stdout
+- Final pass on color output: TTY detection, `NO_COLOR`, `--no-color` flag
+- `--json-errors` flag: structured error output for scripting
+- Docs:
+  - `README.md` with quick-start, install, link to architecture
+  - `docs/architecture.md` — workspace layout, key traits, extension points
+  - `docs/task-format.md` — exactly which Tasks-plugin emoji fields are
+    supported, with examples and a "deferred" section
+  - `docs/query-dsl.md` — full grammar of the supported subset, examples,
+    error catalog
+- Coverage check via `cargo-llvm-cov`, target 80%+ on `ft-core`; fix gaps
+- Real-vault test gated on `FT_REAL_VAULT_TESTS=1`: scans
+  `/Users/cmw/git/fortytwo`, asserts task count > 0, asserts list output
+  is non-empty, asserts a list-then-list cycle is stable
+
+**Tests:**
+- man pages generate without panicking and contain the expected sections
+- Completions parse correctly (shellcheck or equivalent)
+- `--json-errors` produces valid JSON on every error path (smoke test
+  every error variant)
+
+**Done means:**
+- The project is publishable: `cargo install --path ft` works, completions
+  drop into the right shell paths, man pages install, README is enough to
+  get someone going
+- Coverage report committed to `docs/`
+- All acceptance criteria in plan 001 ticked
+
+**Advances acceptance criteria:** "Documentation"; remainder of "Error
+model & UX"; "Testing" (real-vault test).
+
+**Outcome:** 
+
