@@ -590,6 +590,7 @@ dependencies = [
  "ft-core",
  "insta",
  "is-terminal",
+ "nucleo-matcher",
  "owo-colors",
  "predicates",
  "ratatui",

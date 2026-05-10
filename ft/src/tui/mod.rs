@@ -5,6 +5,7 @@ mod tabs;
 #[cfg(test)]
 mod tests;
 mod ui;
+mod widgets;
 
 use std::io::{self, Stdout};
 

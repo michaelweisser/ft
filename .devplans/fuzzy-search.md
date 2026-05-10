@@ -152,25 +152,32 @@ impl Vault {
 The widget lives at `ft/src/tui/widgets/picker.rs` and is constructed by
 callers with a list source so it can serve more than just file search in
 the future.
-- [ ] `FuzzyPicker::new(source: Box<dyn PickerSource>)` where
-      `PickerSource` provides `query(&str, limit) -> Vec<PickerItem>` and
-      `display(&PickerItem) -> Line<'static>` for custom row rendering
-- [ ] Renders inside a caller-supplied `Rect`: 1-line input on top,
-      scrollable result list below
-- [ ] Input handling reuses `EditBuffer` so Ctrl+W / Ctrl+⌫ already work
-- [ ] `↑` / `↓` (and `j` / `k`) move the selection within the result list
-- [ ] `Enter` returns the highlighted `PickerItem`; the caller decides
-      what to do with it
-- [ ] `Esc` cancels and returns `None`
-- [ ] Match highlight: the chars in each result that contributed to the
-      fuzzy score are bolded / colored so the user can see why a row
-      matched
-- [ ] Empty input shows a "type to search" hint
-- [ ] No matches shows "no matches" centered in the list area
-- [ ] Layout adapts to the caller's `Rect` — narrow renders stay readable
-      down to ~40 cols wide
-- [ ] A concrete `VaultFilePickerSource` ships in the same module so the
-      picker is usable out of the box for note / heading selection
+- [x] `FuzzyPicker::new(source)` — generic over `S: PickerSource` (not
+      `Box<dyn>` as the plan sketched; the trait has an associated `Item`
+      type so callers get their concrete data back). `PickerSource`
+      provides `query(&str, limit) -> Vec<PickerItem<Self::Item>>`; row
+      rendering happens inside the widget using `PickerItem.label` +
+      `match_indices`.
+- [x] Renders inside a caller-supplied `Rect`: 3-row input panel on top
+      (border + text + border), scrollable result list below
+- [x] Input handling reuses `EditBuffer` (now hoisted to
+      `crate::tui::widgets`) so Ctrl+W / Ctrl+⌫ / Alt+⌫ all work
+- [x] `↑` / `↓` (and `Ctrl+J` / `Ctrl+K`) move the selection — used
+      `Ctrl+J/K` rather than bare `j/k` so the picker doesn't swallow
+      them while the user is typing the query
+- [x] `Enter` returns the highlighted item's `data` via
+      `PickerOutcome::Selected(T)`; the caller decides what to do with it
+- [x] `Esc` returns `PickerOutcome::Cancelled`
+- [x] Match highlight: chars listed in `PickerItem.match_indices` render
+      bold + underlined + yellow; non-matching chars stay plain white
+- [x] Empty input shows a "type to search…" hint in both the input row
+      and the result area
+- [x] No matches shows "no matches" centered in the list area
+- [x] Layout adapts to the caller's `Rect` — verified by a 40x8 snapshot
+- [x] `VaultFilePickerSource` ships in the same module; runs
+      `Vault::fuzzy_find`, builds labels `path · heading`, and re-runs
+      `Pattern::indices` against path + heading text to map highlight
+      offsets back to the composed label
 
 ### Testing
 - [ ] Unit tests for `Query::parse`: bare text, `text#heading`, `#heading`,
@@ -354,9 +361,66 @@ gated smoke check against the user's real vault.
 Workspace `cargo test` (413 tests), clippy with `-D warnings`, and
 `cargo fmt --check` all clean.
 
-### Session 3 · 2026-05-10 · planned
+### Session 3 · 2026-05-10 · done
 **Goal:** TUI FuzzyPicker widget at ft/src/tui/widgets/picker.rs: PickerSource trait, EditBuffer-backed input, scrollable result list with match highlighting, arrow/jk navigation, Enter returns selection, Esc cancels. Concrete VaultFilePickerSource for the file+heading case. Snapshot tests covering empty / populated / no-match / narrow-width.
-**Outcome:** 
+**Outcome:** Reusable picker shipped, ready for plan-004's session 4 to
+consume.
+
+New module tree:
+- `ft/src/tui/widgets/mod.rs` — module root with `pub use` re-exports
+- `ft/src/tui/widgets/edit_buffer.rs` — hoisted `EditBuffer` (was a
+  private struct inside `tabs/tasks/search.rs`); `pub` fields so views
+  can still read `text`/`cursor` for rendering. `search.rs` updated to
+  import from the new home.
+- `ft/src/tui/widgets/picker.rs` — the widget proper.
+
+Design deviations from the plan sketch:
+- **Generics over `Box<dyn>`.** The plan sketched
+  `Box<dyn PickerSource>`, but the trait has an associated `Item` type so
+  callers get back their concrete payload (e.g. `ft_core::search::Hit`)
+  without `Any` downcasts. `FuzzyPicker<S: PickerSource>` is the result.
+- **`Ctrl+J/K` instead of bare `j/k` for nav.** While the picker's input
+  is focused, bare `j` and `k` go into the query text (would block users
+  whose vault names contain those letters). Arrow keys + `Ctrl+J/K` keep
+  vi-style nav available without swallowing typed chars.
+- **3-row input panel.** A bordered input row makes the picker readable
+  inline or as a popup body; the caller still doesn't draw any outer
+  chrome.
+
+Key behaviors:
+- `PickerOutcome` enum: `Selected(T) | Cancelled | StillOpen | NotHandled`
+- `refresh()` re-runs the source only when input text changes (cached by
+  `last_query` string)
+- Match highlighting walks the label char-by-char, batching same-style
+  runs into `Span`s — yellow + bold + underline for matched chars,
+  plain white for the rest, all on top of the row's selection bg
+- Scroll auto-adjusts: selection stays in view as the user navigates
+  beyond the visible window
+
+`VaultFilePickerSource<'v>`:
+- Holds two nucleo `Matcher`s (path-aware + default) so the indices fed
+  to highlighting match the scoring done by `fuzzy_find`
+- `build_label_with_indices`: composes `"path · heading"` (when a
+  heading is present) and offsets heading indices past path length +
+  separator so they map cleanly into the composed label
+
+`#![allow(dead_code)]` at the module level: the picker has no callers
+yet (plan 004 session 4 wires it in). The trait, struct, methods, and
+the source impl are all exercised by 10 tests, so the API surface is
+real — just not consumed by other code yet.
+
+Tests (10 total, all passing):
+- 4 ratatui-`TestBackend` snapshots: empty-input hint, populated list,
+  no-matches state, narrow-width 40x8 render
+- 4 behavioral: `Enter` returns selected, `Esc` returns `Cancelled`,
+  arrow nav wraps, `Ctrl+W` deletes a word in the input
+- 2 against a real synthetic vault via `VaultFilePickerSource`:
+  `gen consid#Firs` returns a hit whose label includes both path and
+  heading and whose `match_indices` are populated; empty query returns
+  an empty result
+
+Workspace `cargo test` (423 tests), `cargo clippy --workspace
+--all-targets -- -D warnings`, and `cargo fmt --check` all clean.
 
 ### Session 4 · 2026-05-10 · planned
 **Goal:** Polish & audit: 5k-vault perf test gated on FT_PERF_TESTS=1 (<100ms release / <500ms debug budgets), snapshot completeness, help / man-page entries for ft find, no-warnings cleanup, real-vault smoke check.

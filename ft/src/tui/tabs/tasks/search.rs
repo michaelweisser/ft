@@ -23,6 +23,7 @@ use crate::tui::{
     event::Event,
     tab::{AppRequest, EventOutcome, TabCtx},
     tabs::tasks::view::View,
+    widgets::EditBuffer,
 };
 
 /// Search view: lazy task scan, editable DSL query bar, and a paginated list
@@ -256,99 +257,7 @@ enum ParseState {
     Err(String),
 }
 
-#[derive(Debug, Clone, Default)]
-struct EditBuffer {
-    text: String,
-    /// Cursor position as a character offset (not byte offset).
-    cursor: usize,
-}
-
-impl EditBuffer {
-    fn from(text: &str) -> Self {
-        let cursor = text.chars().count();
-        Self {
-            text: text.to_string(),
-            cursor,
-        }
-    }
-
-    fn insert(&mut self, c: char) {
-        let byte_idx = self
-            .text
-            .char_indices()
-            .nth(self.cursor)
-            .map(|(b, _)| b)
-            .unwrap_or(self.text.len());
-        self.text.insert(byte_idx, c);
-        self.cursor += 1;
-    }
-
-    fn backspace(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let prev_char = self
-            .text
-            .char_indices()
-            .nth(self.cursor - 1)
-            .map(|(b, c)| (b, c.len_utf8()));
-        if let Some((b, len)) = prev_char {
-            self.text.replace_range(b..b + len, "");
-            self.cursor -= 1;
-        }
-    }
-
-    fn delete(&mut self) {
-        let target = self
-            .text
-            .char_indices()
-            .nth(self.cursor)
-            .map(|(b, c)| (b, c.len_utf8()));
-        if let Some((b, len)) = target {
-            self.text.replace_range(b..b + len, "");
-        }
-    }
-
-    fn left(&mut self) {
-        self.cursor = self.cursor.saturating_sub(1);
-    }
-
-    fn right(&mut self) {
-        let max = self.text.chars().count();
-        if self.cursor < max {
-            self.cursor += 1;
-        }
-    }
-
-    fn home(&mut self) {
-        self.cursor = 0;
-    }
-
-    fn end(&mut self) {
-        self.cursor = self.text.chars().count();
-    }
-
-    /// Delete from the cursor leftward to the start of the previous word.
-    /// Matches the bash/readline `unix-word-rubout` behavior: skip trailing
-    /// whitespace, then skip non-whitespace, then erase the span.
-    fn delete_word_backward(&mut self) {
-        if self.cursor == 0 {
-            return;
-        }
-        let chars: Vec<char> = self.text.chars().collect();
-        let mut i = self.cursor;
-        while i > 0 && chars[i - 1].is_whitespace() {
-            i -= 1;
-        }
-        while i > 0 && !chars[i - 1].is_whitespace() {
-            i -= 1;
-        }
-        let start_byte: usize = chars[..i].iter().map(|c| c.len_utf8()).sum();
-        let end_byte: usize = chars[..self.cursor].iter().map(|c| c.len_utf8()).sum();
-        self.text.replace_range(start_byte..end_byte, "");
-        self.cursor = i;
-    }
-}
+// EditBuffer now lives in crate::tui::widgets — see import at the top.
 
 impl SearchView {
     pub fn new() -> Self {
