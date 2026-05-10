@@ -16,9 +16,15 @@
 //!           | "due"       ("before"|"after"|"on") date_val
 //!           | "scheduled" ("before"|"after"|"on") date_val
 //!           | "completed" ("before"|"after"|"on") date_val
-//!           | "done"
+//!           | "done" | "not" "done"
+//!           | "open" | "in-progress" | "cancelled"
 //!           | "has" "due" [ "date" ]
 //!           | "no" "due" "date"
+//!
+//! `not done` matches tasks still on your plate (Open or InProgress) — it
+//! excludes both Done AND Cancelled, matching plugin convention. Use the
+//! parenthesized form `not (done)` if you want literal `Status != Done`
+//! (which keeps cancelled in the result).
 //!
 //! sort_keys = sort_key ( "," sort_key )*
 //! sort_key  = ("due"|"scheduled"|"priority"|"path"|"description"|"status")
@@ -425,6 +431,21 @@ impl Parser {
                 self.expect_kw("done")?;
                 Ok(Expr::Atom(Atom::NotDone))
             }
+            // Bare-status predicates mirror `done`. `open`/`cancelled`/
+            // `in-progress` (also `in_progress`) compile to `Atom::Status(_)`
+            // so users don't have to write the long `status is open` form.
+            "open" | "todo" => {
+                self.advance();
+                Ok(Expr::Atom(Atom::Status(Status::Open)))
+            }
+            "in-progress" | "in_progress" | "doing" => {
+                self.advance();
+                Ok(Expr::Atom(Atom::Status(Status::InProgress)))
+            }
+            "cancelled" | "canceled" => {
+                self.advance();
+                Ok(Expr::Atom(Atom::Status(Status::Cancelled)))
+            }
             // Reject features that the plugin supports but we don't.
             "filter" | "group" | "hide" | "show" | "short" | "explain" | "ignore" => {
                 Err(DslError::UnsupportedFeature(head))
@@ -635,6 +656,41 @@ mod tests {
         assert_eq!(q.expr, Some(Expr::Atom(Atom::Done)));
         let q = parse_ok("not done");
         assert_eq!(q.expr, Some(Expr::Atom(Atom::NotDone)));
+    }
+
+    #[test]
+    fn bare_status_predicates() {
+        let q = parse_ok("open");
+        assert_eq!(q.expr, Some(Expr::Atom(Atom::Status(Status::Open))));
+        let q = parse_ok("in-progress");
+        assert_eq!(q.expr, Some(Expr::Atom(Atom::Status(Status::InProgress))));
+        let q = parse_ok("doing");
+        assert_eq!(q.expr, Some(Expr::Atom(Atom::Status(Status::InProgress))));
+        let q = parse_ok("cancelled");
+        assert_eq!(q.expr, Some(Expr::Atom(Atom::Status(Status::Cancelled))));
+        let q = parse_ok("canceled");
+        assert_eq!(q.expr, Some(Expr::Atom(Atom::Status(Status::Cancelled))));
+    }
+
+    #[test]
+    fn bare_predicates_compose_with_combinators() {
+        // `open or in-progress` should match anything `not done` matches.
+        let q = parse_ok("open or in-progress");
+        assert!(matches!(q.expr, Some(Expr::Or(_))));
+    }
+
+    #[test]
+    fn parenthesized_not_done_is_literal_not_equals() {
+        // Escape hatch: `not (done)` keeps cancelled in the result, since the
+        // outer `Not` wraps the literal `Atom::Done`. `not done` (without
+        // parens) is the special-cased plugin-style "still actionable".
+        let q = parse_ok("not (done)");
+        match q.expr {
+            Some(Expr::Not(inner)) => {
+                assert_eq!(*inner, Expr::Atom(Atom::Done));
+            }
+            other => panic!("expected Not(Done), got {other:?}"),
+        }
     }
 
     #[test]

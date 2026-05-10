@@ -25,7 +25,8 @@ predicate = "status"    "is"  status_val
           | "due"       ("before"|"after"|"on") date_val
           | "scheduled" ("before"|"after"|"on") date_val
           | "completed" ("before"|"after"|"on") date_val
-          | "done"
+          | "done" | "not" "done"
+          | "open" | "in-progress" | "cancelled"
           | "has" "due" [ "date" ]
           | "no"  "due" "date"
 
@@ -40,6 +41,24 @@ date_val   = YYYY-MM-DD | "today" | "tomorrow" | "yesterday"
 
 `and` binds tighter than `or`. Use parentheses to override.
 
+## Status predicates
+
+| Predicate         | Matches                                  |
+|-------------------|------------------------------------------|
+| `done`            | Status == Done                           |
+| `not done`        | Status is Open or InProgress (excludes Done **and** Cancelled) |
+| `open` / `todo`   | Status == Open                           |
+| `in-progress` / `in_progress` / `doing` | Status == InProgress       |
+| `cancelled` / `canceled` | Status == Cancelled               |
+| `status is X`     | Long form; `X` is `open`/`done`/`in-progress`/`cancelled` |
+
+`not done` matches plugin convention: a cancelled task isn't on your
+plate, so it shouldn't show up when you ask for what's "not done." If
+you need the literal `Status != Done` (cancelled included), use the
+parenthesized form `not (done)` — the outer `not` then wraps the
+literal `done` predicate instead of the special-cased "still
+actionable" atom.
+
 ## Examples
 
 ```sh
@@ -48,6 +67,11 @@ ft tasks list --query 'not done and no due date'
 
 # Anything high or higher priority due by end of next week
 ft tasks list --query 'priority is high and due before 2026-05-18'
+
+# Bare-status predicates — easier to type than `status is open`
+ft tasks list --query 'open and priority is high'
+ft tasks list --query 'in-progress'
+ft tasks list --query 'cancelled and completed before 2026-01-01'
 
 # Tasks tagged work or personal that are not done, sorted by due asc then priority desc
 ft tasks list --query '(tag is work or tag is personal) and not done sort by due, priority reverse'

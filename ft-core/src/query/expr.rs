@@ -36,7 +36,9 @@ pub enum Atom {
     CompletedOn(NaiveDate),
     /// Status == Done.
     Done,
-    /// Status != Done.
+    /// "Still actionable" — Status is Open or InProgress (excludes Done AND
+    /// Cancelled). Matches plugin convention: cancelled tasks are no longer
+    /// on your plate, so `not done` shouldn't list them.
     NotDone,
     HasDue,
     NoDue,
@@ -72,7 +74,7 @@ impl Atom {
             Atom::CompletedAfter(d) => matches!(task.done, Some(td) if td > *d),
             Atom::CompletedOn(d) => matches!(task.done, Some(td) if td == *d),
             Atom::Done => task.status == Status::Done,
-            Atom::NotDone => task.status != Status::Done,
+            Atom::NotDone => matches!(task.status, Status::Open | Status::InProgress),
             Atom::HasDue => task.due.is_some(),
             Atom::NoDue => task.due.is_none(),
         }
@@ -115,6 +117,21 @@ mod tests {
         t.status = Status::Done;
         assert!(Atom::Done.matches(&t));
         assert!(!Atom::NotDone.matches(&t));
+    }
+
+    #[test]
+    fn not_done_excludes_cancelled() {
+        // Plugin convention: cancelled is "no longer on your plate", so
+        // `not done` is "still actionable" = Open or InProgress only.
+        let mut t = task("a");
+        t.status = Status::Cancelled;
+        assert!(!Atom::NotDone.matches(&t));
+        assert!(!Atom::Done.matches(&t));
+
+        t.status = Status::Open;
+        assert!(Atom::NotDone.matches(&t));
+        t.status = Status::InProgress;
+        assert!(Atom::NotDone.matches(&t));
     }
 
     #[test]
