@@ -145,10 +145,14 @@ or fall through to the form.
 - [x] Duplicate-detection error surfaces inline (`⚠ duplicate exists at
       Inbox.md:42`) and keeps the panel open so the user can adjust
       *(Ctrl+Enter force-insert is deferred per the plan)*
-- [x] After a successful write the Search view re-scans (same path as
-      `R`); cursor-anchor-to-new-task lands in session 3
-- [ ] A toast in the status bar's center cell shows `created PATH:LINE`
-      for ~3 seconds *(session 3)*
+- [x] After a successful write the Search view re-scans and the cursor
+      moves to the new task's row if it passes the active filter; if it
+      doesn't, the cursor returns to where it sat before the write
+- [x] A toast in the status bar's center cell shows `created PATH:LINE`
+      for ~3 seconds (green for success, red for IO error)
+- [x] Toast styling: green for success, red for error (the error toast
+      shows after a write fails for IO reasons; duplicate detection
+      stays inline because it's recoverable)
 - [ ] Toast styling: green for success, red for error (the error toast
       shows after a write fails for IO reasons; duplicate detection stays
       inline because it's recoverable)
@@ -389,9 +393,79 @@ for `help_overlay_80x24` and `help_overlay_over_tasks_80x24` accepted.
 99 tui tests pass; workspace `cargo test` (490 tests), clippy
 `-D warnings`, and `cargo fmt --check` all clean.
 
-### Session 3 · 2026-05-10 · planned
+### Session 3 · 2026-05-10 · done
 **Goal:** Post-create UX polish: Toast struct + status-bar cell rendering, AppRequest::TaskCreated, cursor-anchor-to-new-task when it matches the active filter, IO-error red toast, tick-based 3s toast expiry.
-**Outcome:** 
+**Outcome:** Post-create UX polish landed.
+
+**Toast plumbing.** New types in `tab.rs`:
+- `AppRequest::Toast { text, style }` — generic toast request (used by
+  the quickline now; future surfaces can fire toasts the same way).
+- `ToastStyle::{Success, Error}` — green / red.
+
+And in `app.rs`:
+- `Toast { text, style, deadline: Instant }` — owned data + expiry.
+- `App.toast: RefCell<Option<Toast>>` — single slot; new toasts
+  overwrite the old (no queue; the most recent message is the one the
+  user wants to see).
+- `service_request` services `Toast` by setting the slot with `now +
+  TOAST_DURATION` (3 s).
+- `draw` expires stale toasts before rendering so the status-bar cell
+  flips back to `refreshed HH:MM:SS` on the very tick the deadline
+  passes — the existing 1-second tick is the only timer needed.
+
+`render_status_bar` now takes `Option<&Toast>` and the center cell
+shows the toast text in green or red (bold) when active, falling back
+to the refresh timestamp otherwise.
+
+**Naming deviation from the plan.** The plan sketched
+`AppRequest::TaskCreated { path, line }` and had the App orchestrate
+the post-create work. I went with a more general
+`AppRequest::Toast { text, style }` instead because (a) the cursor
+anchor is search-view-specific knowledge that fits better inside the
+view than the App, and (b) future surfaces (rename, move, etc.) can
+fire toasts without each one adding a new AppRequest variant.
+SearchView does its own anchor + reload before firing the toast.
+
+**Cursor anchor.** New `SearchView::refresh_and_anchor_to_create`:
+- Captures the prior selection's (path, line) before the write
+- Reloads, then tries the *new task's* (path, line) first
+- Falls back to the prior anchor if the new task didn't pass the
+  active filter
+- Falls through to `selected = 0` when neither anchor matches,
+  saturating to the last row when the list shrank
+
+`submit_quickline` builds the relative target path from the resolved
+absolute path (so the toast and anchor agree with how rows are keyed
+in the matches list).
+
+**IO-error vs duplicate.** Duplicate stays inline (panel stays open,
+user retypes); any other `CreateError` closes the panel and surfaces
+as a red toast — those errors aren't fixable from inside the
+quickline so blocking the user there would just trap them.
+
+**Test helpers.** Added to `App`:
+- `service_pending_for_test()` — services queued `Toast` requests
+  without spinning the real event loop (other variants are re-queued
+  so editor-handoff tests still work)
+- `current_toast()` — clones the active toast for assertions
+
+**Tests (4 new in tui::tests, plus 1 match-arm update in the
+editor-handoff test).**
+- `quickline_success_raises_green_toast_request` — submit → toast
+  text starts with `created ` and style is `Success`
+- `quickline_success_renders_toast_in_status_bar_center_cell` —
+  status-bar row contains the toast text
+- `quickline_success_anchors_cursor_to_new_task_when_it_matches_filter`
+  — the new task's list row carries `▶` after the create
+- `quickline_duplicate_does_not_raise_toast` — duplicate stays inline,
+  toast slot remains empty
+
+The pre-existing `enter_on_search_view_queues_editor_open_request`
+test got a new `AppRequest::Toast { .. }` match arm that panics so
+the exhaustive match keeps working.
+
+103 tui tests; full workspace `cargo test` (494 tests); clippy
+`-D warnings` + fmt --check all clean.
 
 ### Session 4 · 2026-05-10 · planned
 **Goal:** Expanded popup: Shift+C opens the popup directly, Ctrl+E from quickline expands with parsed fields pre-populated, new target field with vault-root path validation, refactor edit popup to share render path between new/edit modes.

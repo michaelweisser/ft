@@ -8,12 +8,31 @@ use ratatui::{layout::Rect, Frame};
 
 use crate::tui::event::Event;
 
-/// Side-effect a tab/view can request from the App. Currently only used for
-/// suspending the alt-screen and spawning `$EDITOR`; future sessions may add
-/// "open URL" or "show toast" without touching the Tab trait.
+/// Side-effect a tab/view can request from the App. Lets the App orchestrate
+/// surface-level concerns (suspending the alt-screen for `$EDITOR`, pushing
+/// a status-bar toast) without each tab reaching for terminal state.
 #[derive(Debug, Clone)]
 pub enum AppRequest {
-    OpenInEditor { path: PathBuf, line: usize },
+    OpenInEditor {
+        path: PathBuf,
+        line: usize,
+    },
+    /// Show a transient status-bar message — replaces the
+    /// `refreshed HH:MM:SS` cell for ~3 seconds.
+    Toast {
+        text: String,
+        style: ToastStyle,
+    },
+}
+
+/// Visual styling for a [`Toast`]. Green for success (create, save),
+/// red for errors (IO failures, validation fallout). The middle of the
+/// status bar runs all toasts through one renderer, so adding a new
+/// shade later is a single match arm.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ToastStyle {
+    Success,
+    Error,
 }
 
 /// What the App should do after a tab handles an event. `Consumed` and `Quit`

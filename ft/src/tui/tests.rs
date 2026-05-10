@@ -656,6 +656,7 @@ fn enter_on_search_view_queues_editor_open_request() -> Result<()> {
             assert_eq!(actual, expected);
             assert_eq!(line, 1, "first selection should be at line 1");
         }
+        AppRequest::Toast { .. } => panic!("expected OpenInEditor, got Toast"),
     }
     Ok(())
 }
@@ -1403,6 +1404,111 @@ fn quickline_empty_description_blocks_write() -> Result<()> {
     );
     let daily = dir.path().join("test-vault/Daily/2026-05-10.md");
     assert!(!daily.exists() || std::fs::read_to_string(daily).unwrap().trim().is_empty());
+    Ok(())
+}
+
+#[test]
+fn quickline_success_raises_green_toast_request() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "buy milk due:tomorrow".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Service the queued AppRequest::Toast so the App's toast slot
+    // becomes populated (the run-loop does this between iterations).
+    app.service_pending_for_test()?;
+    let toast = app
+        .current_toast()
+        .expect("a toast should be active after a successful create");
+    assert!(
+        toast.text.starts_with("created "),
+        "toast text: {}",
+        toast.text
+    );
+    assert_eq!(toast.style, crate::tui::tab::ToastStyle::Success);
+    Ok(())
+}
+
+#[test]
+fn quickline_success_renders_toast_in_status_bar_center_cell() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "draft report due:tomorrow".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_for_test()?;
+    let frame = render(&mut app, 120, 24);
+    let status = frame.lines().last().expect("status bar row");
+    assert!(
+        status.contains("created"),
+        "status bar should show the toast: {status}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quickline_success_anchors_cursor_to_new_task_when_it_matches_filter() -> Result<()> {
+    // New task is due tomorrow → passes the default `not done and due
+    // before today+8d` filter, so it should appear in the list AND the
+    // cursor should land on its row.
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "anchor target due:tomorrow".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 120, 24);
+    // Find the row with the new task and assert it carries the `▶` cursor.
+    let row = frame
+        .lines()
+        .find(|l| l.contains("anchor target"))
+        .expect("new task missing from list");
+    assert!(
+        row.contains('▶'),
+        "cursor should anchor to the new task row: {row}"
+    );
+    Ok(())
+}
+
+#[test]
+fn quickline_duplicate_does_not_raise_toast() -> Result<()> {
+    // Duplicate detection stays inline (the user can edit and retry),
+    // so it must NOT also fire a toast — that'd be redundant noise.
+    let (dir, vault) = quickline_vault();
+    let inbox = dir.path().join("test-vault/Inbox.md");
+    std::fs::write(&inbox, "- [ ] dup task 📅 2026-05-11\n").unwrap();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "dup task due:tomorrow in:Inbox.md".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_for_test()?;
+    assert!(
+        app.current_toast().is_none(),
+        "duplicate should stay inline, not fire a toast"
+    );
     Ok(())
 }
 

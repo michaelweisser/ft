@@ -18,11 +18,27 @@ use ratatui::Frame;
 use crate::tui::tabs::tasks::ClockFn;
 use crate::tui::{
     event::{Event, EventStream},
-    tab::{AppRequest, EventOutcome, Tab, TabCtx},
+    tab::{AppRequest, EventOutcome, Tab, TabCtx, ToastStyle},
     tabs::{tasks::TasksTab, welcome::WelcomeTab},
     ui::{self, Mode},
     Tui,
 };
+
+/// A transient status-bar message. The center cell of the status bar
+/// shows the toast text in place of `refreshed HH:MM:SS` until the
+/// deadline elapses; the 1-second tick already drives the redraw loop,
+/// so expiry happens naturally without a separate timer.
+#[derive(Debug, Clone)]
+pub struct Toast {
+    pub text: String,
+    pub style: ToastStyle,
+    pub deadline: std::time::Instant,
+}
+
+/// How long a toast stays on screen unless overwritten by a later one.
+/// Picked to be long enough to read a short message but short enough not
+/// to mask a subsequent action.
+const TOAST_DURATION: Duration = Duration::from_secs(3);
 
 pub struct App {
     vault: Vault,
@@ -32,6 +48,8 @@ pub struct App {
     mode: Mode,
     last_refresh: Cell<Option<DateTime<Local>>>,
     pending_request: RefCell<Option<AppRequest>>,
+    /// Active toast, if any. `RefCell` because `Toast` is `!Copy`.
+    toast: RefCell<Option<Toast>>,
     should_quit: bool,
 }
 
@@ -51,6 +69,7 @@ impl App {
             mode: Mode::Normal,
             last_refresh: Cell::new(None),
             pending_request: RefCell::new(None),
+            toast: RefCell::new(None),
             should_quit: false,
         }
     }
@@ -106,12 +125,25 @@ impl App {
         };
         ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
 
+        // Expire stale toasts before drawing so the cell falls back to
+        // the refresh time on the very tick the deadline passes.
+        let toast_now = std::time::Instant::now();
+        let active_toast = {
+            let mut slot = self.toast.borrow_mut();
+            if let Some(t) = slot.as_ref() {
+                if t.deadline <= toast_now {
+                    *slot = None;
+                }
+            }
+            slot.clone()
+        };
         ui::render_status_bar(
             frame,
             status_bar,
             &vault_name,
             self.tabs[self.active].title(),
             self.last_refresh.get(),
+            active_toast.as_ref(),
             self.mode,
         );
 
@@ -242,6 +274,14 @@ impl App {
                 status?;
                 Ok(())
             }
+            AppRequest::Toast { text, style } => {
+                *self.toast.borrow_mut() = Some(Toast {
+                    text,
+                    style,
+                    deadline: std::time::Instant::now() + TOAST_DURATION,
+                });
+                Ok(())
+            }
         }
     }
 }
@@ -360,5 +400,35 @@ impl App {
     /// Used by tests to assert that an Enter keypress queued an editor open.
     pub fn take_pending_request(&self) -> Option<AppRequest> {
         self.pending_request.borrow_mut().take()
+    }
+
+    /// Service whatever pending `AppRequest` is queued (or do nothing if
+    /// none). Mirrors what `run` does between iterations — tests use this
+    /// to drive the toast / refresh side-effects without spinning up a
+    /// real event loop.
+    pub fn service_pending_for_test(&mut self) -> Result<()> {
+        if let Some(req) = self.pending_request.borrow_mut().take() {
+            match req {
+                AppRequest::Toast { text, style } => {
+                    *self.toast.borrow_mut() = Some(Toast {
+                        text,
+                        style,
+                        deadline: std::time::Instant::now() + TOAST_DURATION,
+                    });
+                }
+                // Other variants need terminal state; tests that exercise
+                // them go through the real `service_request` path.
+                _ => {
+                    *self.pending_request.borrow_mut() = Some(req);
+                }
+            }
+        }
+        Ok(())
+    }
+
+    /// Currently-active toast, if any. Used by tests to assert the
+    /// post-create UX.
+    pub fn current_toast(&self) -> Option<Toast> {
+        self.toast.borrow().clone()
     }
 }

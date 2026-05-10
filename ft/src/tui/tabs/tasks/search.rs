@@ -21,7 +21,7 @@ use ratatui::{
 
 use crate::tui::{
     event::Event,
-    tab::{AppRequest, EventOutcome, TabCtx},
+    tab::{AppRequest, EventOutcome, TabCtx, ToastStyle},
     tabs::tasks::{quickline::parse_quickline, view::View},
     widgets::EditBuffer,
 };
@@ -828,6 +828,44 @@ impl SearchView {
         Ok(())
     }
 
+    /// Refresh after a create. Prefer to anchor at the new task's
+    /// `(path, line)`; if the new task doesn't pass the current filter,
+    /// fall back to where the cursor was sitting before the write so the
+    /// user doesn't lose their place.
+    fn refresh_and_anchor_to_create(
+        &mut self,
+        ctx: &mut TabCtx,
+        new: (std::path::PathBuf, usize),
+        prior: Option<(std::path::PathBuf, usize)>,
+    ) -> Result<()> {
+        self.reload(ctx)?;
+        // Try the new task first.
+        if let Some((i, _)) = self.matches.iter().enumerate().find(|(_, &task_idx)| {
+            let t = &self.tasks[task_idx];
+            t.source_file == new.0 && t.source_line == new.1
+        }) {
+            self.selected = i;
+            return Ok(());
+        }
+        // Fall back to the prior selection.
+        if let Some(p) = prior {
+            if let Some((i, _)) = self.matches.iter().enumerate().find(|(_, &task_idx)| {
+                let t = &self.tasks[task_idx];
+                t.source_file == p.0 && t.source_line == p.1
+            }) {
+                self.selected = i;
+                return Ok(());
+            }
+        }
+        // Neither anchor still matches — leave selected at 0 (set by
+        // `reload`'s `recompute_matches`), but saturate if the list is
+        // empty / shorter than the previous cursor.
+        if !self.matches.is_empty() && self.selected >= self.matches.len() {
+            self.selected = self.matches.len() - 1;
+        }
+        Ok(())
+    }
+
     fn with_selected_task<F>(&mut self, ctx: &mut TabCtx, op: F) -> Result<EventOutcome>
     where
         F: FnOnce(&std::path::Path, &Task, NaiveDate) -> Result<()>,
@@ -1181,6 +1219,13 @@ impl SearchView {
             depends_on: Vec::new(),
         };
 
+        // Capture the prior cursor (if any) so a create that doesn't pass
+        // the active filter can fall back to "stay where you were".
+        let prior = self
+            .matches
+            .get(self.selected)
+            .map(|&i| (self.tasks[i].source_file.clone(), self.tasks[i].source_line));
+
         match ops::create_task(
             &target,
             input,
@@ -1189,13 +1234,17 @@ impl SearchView {
                 force: false,
             },
         ) {
-            Ok(_) => {
-                // Success — close panel, refresh so the new row is in
-                // the matches list, and let session 3 handle cursor-anchor
-                // and toast. For now the user sees the panel disappear
-                // and the list reload.
+            Ok(outcome) => {
                 self.quickline = None;
-                self.reload(ctx)?;
+                let rel_target = target
+                    .strip_prefix(&ctx.vault.path)
+                    .map(|p| p.to_path_buf())
+                    .unwrap_or_else(|_| target.clone());
+                self.refresh_and_anchor_to_create(ctx, (rel_target.clone(), outcome.line), prior)?;
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                    text: format!("created {}:{}", rel_target.display(), outcome.line),
+                    style: ToastStyle::Success,
+                });
                 Ok(EventOutcome::Consumed)
             }
             Err(ops::CreateError::Duplicate { path, line }) => {
@@ -1205,7 +1254,15 @@ impl SearchView {
                 Ok(EventOutcome::Consumed)
             }
             Err(e) => {
-                self.quickline.as_mut().unwrap().error = Some(e.to_string());
+                // Non-recoverable error (IO failure, etc.) — close the
+                // panel and surface it as a red status-bar toast so the
+                // user can act on it without staring at a panel they
+                // can't fix from inside the quickline.
+                self.quickline = None;
+                *ctx.pending_request.borrow_mut() = Some(AppRequest::Toast {
+                    text: format!("create failed: {e}"),
+                    style: ToastStyle::Error,
+                });
                 Ok(EventOutcome::Consumed)
             }
         }

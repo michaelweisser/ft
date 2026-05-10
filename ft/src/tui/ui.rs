@@ -64,6 +64,7 @@ pub fn render_status_bar(
     vault_name: &str,
     tab_title: &str,
     last_refresh: Option<chrono::DateTime<Local>>,
+    toast: Option<&crate::tui::app::Toast>,
     mode: Mode,
 ) {
     let chunks = Layout::default()
@@ -83,15 +84,29 @@ pub fn render_status_bar(
         Span::styled(tab_title, Style::default().fg(Color::White)),
     ]);
 
-    let refresh_text = match last_refresh {
-        Some(ts) => format!("refreshed {}", ts.format("%H:%M:%S")),
-        None => "not yet refreshed".to_string(),
+    // Toast takes priority over the refresh timestamp so transient
+    // success/error feedback isn't crowded out by the periodic redraw.
+    let center = if let Some(t) = toast {
+        let color = match t.style {
+            crate::tui::tab::ToastStyle::Success => Color::Green,
+            crate::tui::tab::ToastStyle::Error => Color::Red,
+        };
+        Line::from(Span::styled(
+            t.text.clone(),
+            Style::default().fg(color).add_modifier(Modifier::BOLD),
+        ))
+        .alignment(Alignment::Center)
+    } else {
+        let refresh_text = match last_refresh {
+            Some(ts) => format!("refreshed {}", ts.format("%H:%M:%S")),
+            None => "not yet refreshed".to_string(),
+        };
+        Line::from(Span::styled(
+            refresh_text,
+            Style::default().fg(Color::DarkGray),
+        ))
+        .alignment(Alignment::Center)
     };
-    let center = Line::from(Span::styled(
-        refresh_text,
-        Style::default().fg(Color::DarkGray),
-    ))
-    .alignment(Alignment::Center);
 
     let right = Line::from(vec![
         Span::styled("mode: ", Style::default().fg(Color::DarkGray)),
