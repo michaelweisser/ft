@@ -8,8 +8,11 @@ use clap::{Args, Subcommand, ValueEnum};
 use ft_core::{
     daily, dates,
     query::{dsl, expr::Expr, filter::Filter, preset, sort::sort_by_keys, SortKey, SortOrder},
+    selector,
     task::{
-        ops::{self, CreateError, CreateInput, CreateOptions, Position},
+        ops::{
+            self, CompleteError, CompleteOptions, CreateError, CreateInput, CreateOptions, Position,
+        },
         Priority, Status, Task,
     },
     vault::Vault,
@@ -29,6 +32,8 @@ pub enum TasksCommand {
     List(ListArgs),
     /// Create a new task.
     Create(CreateArgs),
+    /// Mark a task complete (and write the next instance if recurring).
+    Complete(CompleteArgs),
 }
 
 #[derive(ValueEnum, Clone, Copy, Debug)]
@@ -153,6 +158,7 @@ pub fn run(args: TasksArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
     match args.command {
         TasksCommand::List(list_args) => run_list(list_args, vault_flag),
         TasksCommand::Create(create_args) => run_create(create_args, vault_flag),
+        TasksCommand::Complete(complete_args) => run_complete(complete_args, vault_flag),
     }
 }
 
@@ -555,6 +561,187 @@ fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {
         ));
     }
     Ok(())
+}
+
+// ── ft tasks complete ────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct CompleteArgs {
+    /// Selector: task id (`abc123`), `<file>:<line>`, or fuzzy substring.
+    /// If omitted, all open tasks are presented in an interactive picker.
+    #[arg(value_name = "SELECTOR")]
+    pub selector: Option<String>,
+
+    /// Date to record as the done date. Accepts ISO, keywords, relative,
+    /// and natural language (same forms as `ft tasks create --due`).
+    /// Defaults to today.
+    #[arg(long, value_name = "DATE")]
+    pub on: Option<String>,
+
+    /// Skip the interactive picker even when there are multiple matches.
+    /// With `--yes`, the picker is replaced by an error listing candidates.
+    #[arg(long)]
+    pub yes: bool,
+}
+
+fn run_complete(args: CompleteArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+
+    let today = std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Local::now().date_naive());
+    let on = match args.on.as_deref() {
+        Some(s) => dates::parse(s, today).map_err(|e| anyhow!("--on: {e}"))?,
+        None => today,
+    };
+
+    let scan = vault.scan();
+    for err in &scan.errors {
+        tracing::warn!("{}", err);
+    }
+
+    let chosen = pick_task(&args, &scan.tasks)?;
+
+    let absolute_path = vault.path.join(&chosen.source_file);
+    let outcome = ops::complete_task(&absolute_path, chosen.source_line, CompleteOptions { on })
+        .map_err(|e| translate_complete_error(e, &vault.path))?;
+
+    let rel = absolute_path
+        .strip_prefix(&vault.path)
+        .unwrap_or(&absolute_path);
+    println!(
+        "Completed {}:{}\n  {}",
+        rel.display(),
+        outcome.completed_line,
+        outcome.completed_serialized
+    );
+    if let Some(next) = outcome.next_instance {
+        println!(
+            "Recurring: next instance at {}:{}\n  {}",
+            rel.display(),
+            next.line,
+            next.serialized
+        );
+    }
+
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve the selector argument into exactly one task. The selector can be
+/// missing (use the interactive picker over open tasks), produce zero matches
+/// (error), one match (use it directly), or many (interactive picker, or error
+/// under `--yes` / non-TTY).
+fn pick_task<'a>(args: &CompleteArgs, tasks: &'a [Task]) -> Result<&'a Task> {
+    let candidates: Vec<&Task> = match args.selector.as_deref() {
+        None => tasks
+            .iter()
+            .filter(|t| !matches!(t.status, Status::Done))
+            .collect(),
+        Some(s) => {
+            // Try the structured form first. If a bare-id-shaped selector
+            // matches no task by id, fall through to fuzzy matching so users
+            // can type a single word and have it match a description.
+            let sel = selector::parse(s);
+            let mut matches = selector::resolve(tasks, &sel);
+            if matches.is_empty() && matches!(sel, ft_core::selector::Selector::Id(_)) {
+                let fuzzy = ft_core::selector::Selector::Fuzzy(s.to_string());
+                matches = selector::resolve(tasks, &fuzzy);
+            }
+            if matches.is_empty() {
+                return Err(anyhow!("no tasks match selector `{s}`"));
+            }
+            matches
+        }
+    };
+
+    if candidates.len() == 1 {
+        return Ok(candidates[0]);
+    }
+
+    if candidates.is_empty() {
+        return Err(anyhow!("no open tasks in vault"));
+    }
+
+    let stdin_is_tty = is_terminal::IsTerminal::is_terminal(&std::io::stdin());
+    if args.yes || !stdin_is_tty {
+        let preview: Vec<String> = candidates
+            .iter()
+            .take(5)
+            .map(|t| {
+                format!(
+                    "  {}:{}  {}",
+                    t.source_file.display(),
+                    t.source_line,
+                    t.description
+                )
+            })
+            .collect();
+        let extra = if candidates.len() > 5 {
+            format!("\n  … and {} more", candidates.len() - 5)
+        } else {
+            String::new()
+        };
+        return Err(anyhow!(
+            "{} candidates match — be more specific:\n{}{extra}",
+            candidates.len(),
+            preview.join("\n")
+        ));
+    }
+
+    let labels: Vec<String> = candidates
+        .iter()
+        .map(|t| {
+            format!(
+                "{}:{}  {}",
+                t.source_file.display(),
+                t.source_line,
+                t.description
+            )
+        })
+        .collect();
+    let chosen = dialoguer::FuzzySelect::new()
+        .with_prompt("complete which task?")
+        .items(&labels)
+        .default(0)
+        .interact_opt()
+        .map_err(|e| anyhow!("picker failed: {e}"))?
+        .ok_or_else(|| anyhow!("no task selected"))?;
+    Ok(candidates[chosen])
+}
+
+fn translate_complete_error(e: CompleteError, vault_root: &std::path::Path) -> anyhow::Error {
+    use CompleteError::*;
+    match e {
+        Read { path, source } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("could not read {}: {source}", rel.display())
+        }
+        LineMissing {
+            path,
+            line,
+            file_lines,
+        } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "line {line} not found in {} ({file_lines} lines)",
+                rel.display()
+            )
+        }
+        NotATask { path, line } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!("line {line} in {} is not a task", rel.display())
+        }
+        AlreadyDone { path, line, done } => {
+            let rel = path.strip_prefix(vault_root).unwrap_or(&path);
+            anyhow!(
+                "task at {}:{} is already done (on {done})",
+                rel.display(),
+                line
+            )
+        }
+        other => anyhow!("{other}"),
+    }
 }
 
 #[cfg(test)]

@@ -4,5 +4,6 @@ pub mod dates;
 pub mod error;
 pub mod fs;
 pub mod query;
+pub mod selector;
 pub mod task;
 pub mod vault;

@@ -9,6 +9,7 @@ use thiserror::Error;
 use super::{
     emoji::EmojiFormat,
     format::{ParseContext, TaskFormat},
+    recurrence::{self, RecurrenceError},
     Priority, Status, Task,
 };
 use crate::fs::write_atomic;
@@ -277,6 +278,164 @@ fn section_end(lines: &[String], heading_idx: usize, level: usize) -> usize {
     end
 }
 
+// ── complete_task ────────────────────────────────────────────────────────────
+
+#[derive(Debug, Error)]
+pub enum CompleteError {
+    #[error("could not read {}: {source}", .path.display())]
+    Read {
+        path: PathBuf,
+        #[source]
+        source: std::io::Error,
+    },
+    #[error("line {line} not found in {} ({file_lines} lines)", .path.display())]
+    LineMissing {
+        path: PathBuf,
+        line: usize,
+        file_lines: usize,
+    },
+    #[error("line {line} in {} is not a task", .path.display())]
+    NotATask { path: PathBuf, line: usize },
+    #[error("task at {}:{} is already done (on {})", .path.display(), .line, .done)]
+    AlreadyDone {
+        path: PathBuf,
+        line: usize,
+        done: NaiveDate,
+    },
+    #[error(transparent)]
+    Recurrence(#[from] RecurrenceError),
+    #[error("write failed: {source}")]
+    Write {
+        #[from]
+        source: crate::error::Error,
+    },
+}
+
+#[derive(Debug, Clone)]
+pub struct CompleteOptions {
+    /// Date to record as the done date.
+    pub on: NaiveDate,
+}
+
+#[derive(Debug)]
+pub struct CompleteOutcome {
+    /// 1-indexed line of the now-done task in the rewritten file.
+    pub completed_line: usize,
+    /// Serialized form of the completed task line.
+    pub completed_serialized: String,
+    /// If the task was recurring, the new instance's 1-indexed line and
+    /// serialized form.
+    pub next_instance: Option<NextInstance>,
+}
+
+#[derive(Debug)]
+pub struct NextInstance {
+    pub line: usize,
+    pub serialized: String,
+}
+
+/// Mark the task at `target_path:line` complete. If the task is recurring,
+/// the next instance is inserted *above* the now-completed line (matching
+/// plugin behavior).
+pub fn complete_task(
+    target_path: &Path,
+    line: usize,
+    opts: CompleteOptions,
+) -> Result<CompleteOutcome, CompleteError> {
+    let content = std::fs::read_to_string(target_path).map_err(|e| CompleteError::Read {
+        path: target_path.to_path_buf(),
+        source: e,
+    })?;
+
+    let mut lines: Vec<String> = content
+        .split_inclusive('\n')
+        .map(|s| s.trim_end_matches('\n').trim_end_matches('\r').to_string())
+        .collect();
+
+    if line == 0 || line > lines.len() {
+        return Err(CompleteError::LineMissing {
+            path: target_path.to_path_buf(),
+            line,
+            file_lines: lines.len(),
+        });
+    }
+
+    let idx = line - 1;
+    let original = &lines[idx];
+    let ctx = ParseContext {
+        source_file: PathBuf::new(),
+        source_line: line,
+    };
+    let task = EmojiFormat
+        .parse_line(original, ctx)
+        .ok_or_else(|| CompleteError::NotATask {
+            path: target_path.to_path_buf(),
+            line,
+        })?;
+
+    if task.status == Status::Done {
+        if let Some(done) = task.done {
+            return Err(CompleteError::AlreadyDone {
+                path: target_path.to_path_buf(),
+                line,
+                done,
+            });
+        }
+    }
+
+    let next_task = if let Some(rule_str) = task.recurrence.as_deref() {
+        let rule = recurrence::parse_rule(rule_str)?;
+        let next = recurrence::next_dates(&rule, &task)?;
+        let mut t = task.clone();
+        t.status = Status::Open;
+        t.start = next.start;
+        t.scheduled = next.scheduled;
+        t.due = next.due;
+        t.done = None;
+        t.cancelled = None;
+        Some(t)
+    } else {
+        None
+    };
+
+    let mut completed = task;
+    completed.status = Status::Done;
+    completed.done = Some(opts.on);
+    let completed_line = EmojiFormat.serialize_line(&completed);
+
+    let mut next_instance: Option<NextInstance> = None;
+    if let Some(t) = next_task {
+        let serialized = EmojiFormat.serialize_line(&t);
+        // Insert the new instance above the completed line.
+        lines.insert(idx, serialized.clone());
+        next_instance = Some(NextInstance {
+            // The just-inserted line takes over the original `line` slot.
+            line,
+            serialized,
+        });
+        // The completed task is now at idx+1 (1-indexed: line+1).
+        lines[idx + 1] = completed_line.clone();
+    } else {
+        lines[idx] = completed_line.clone();
+    }
+
+    let mut joined = lines.join("\n");
+    joined.push('\n');
+    write_atomic(target_path, &joined)?;
+
+    let completed_line_no = if next_instance.is_some() {
+        line + 1
+    } else {
+        line
+    };
+
+    Ok(CompleteOutcome {
+        completed_line: completed_line_no,
+        completed_serialized: completed_line,
+        next_instance,
+    })
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -511,5 +670,139 @@ mod tests {
         assert_eq!(parse_heading("####### Seven"), None);
         assert_eq!(parse_heading("not a heading"), None);
         assert_eq!(parse_heading("#NoSpace"), None);
+    }
+
+    // ── complete_task ─────────────────────────────────────────────────────────
+
+    #[test]
+    fn complete_simple_task_marks_done_with_date() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "# Notes\n- [ ] Buy milk 📅 2026-05-10\n").unwrap();
+        let outcome = complete_task(&p, 2, CompleteOptions { on: d(2026, 5, 10) }).unwrap();
+        assert_eq!(outcome.completed_line, 2);
+        assert!(outcome.next_instance.is_none());
+        let content = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            content,
+            "# Notes\n- [x] Buy milk 📅 2026-05-10 ✅ 2026-05-10\n"
+        );
+    }
+
+    #[test]
+    fn complete_already_done_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "- [x] task ✅ 2026-05-09\n").unwrap();
+        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        assert!(matches!(err, CompleteError::AlreadyDone { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn complete_non_task_line_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "# Heading\nProse\n").unwrap();
+        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        assert!(matches!(err, CompleteError::NotATask { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn complete_line_out_of_range_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "- [ ] x\n").unwrap();
+        let err = complete_task(&p, 5, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        assert!(matches!(err, CompleteError::LineMissing { .. }), "{err:?}");
+    }
+
+    #[test]
+    fn complete_recurring_task_inserts_next_instance_above() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(
+            &p,
+            "- [ ] Pay tax 🔁 every month on the 18th 📅 2026-05-18\n",
+        )
+        .unwrap();
+        let outcome = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 18) }).unwrap();
+        // The next instance lives where the original task was; the completed
+        // task moved down one line.
+        assert_eq!(outcome.completed_line, 2);
+        let next = outcome.next_instance.expect("recurrence creates next");
+        assert_eq!(next.line, 1);
+
+        let content = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            content,
+            "- [ ] Pay tax 🔁 every month on the 18th 📅 2026-06-18\n\
+             - [x] Pay tax 🔁 every month on the 18th 📅 2026-05-18 ✅ 2026-05-18\n"
+        );
+    }
+
+    #[test]
+    fn complete_recurring_weekly_shifts_all_dates() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(
+            &p,
+            "- [ ] Standup 🔁 every week ⏳ 2026-05-08 📅 2026-05-10\n",
+        )
+        .unwrap();
+        complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap();
+        let content = std::fs::read_to_string(&p).unwrap();
+        // delta = +7 days, so scheduled and due both shift by 7.
+        assert_eq!(
+            content,
+            "- [ ] Standup 🔁 every week ⏳ 2026-05-15 📅 2026-05-17\n\
+             - [x] Standup 🔁 every week ⏳ 2026-05-08 📅 2026-05-10 ✅ 2026-05-10\n"
+        );
+    }
+
+    #[test]
+    fn complete_recurring_with_unsupported_pattern_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "- [ ] Yearly thing 🔁 every year 📅 2026-05-10\n").unwrap();
+        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        assert!(
+            matches!(
+                err,
+                CompleteError::Recurrence(RecurrenceError::Unsupported { .. })
+            ),
+            "{err:?}"
+        );
+        // File must be untouched.
+        let content = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(content, "- [ ] Yearly thing 🔁 every year 📅 2026-05-10\n");
+    }
+
+    #[test]
+    fn complete_recurring_with_no_anchor_errors() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(&p, "- [ ] No-anchor 🔁 every day\n").unwrap();
+        let err = complete_task(&p, 1, CompleteOptions { on: d(2026, 5, 10) }).unwrap_err();
+        assert!(
+            matches!(err, CompleteError::Recurrence(RecurrenceError::NoAnchor)),
+            "{err:?}"
+        );
+    }
+
+    #[test]
+    fn complete_preserves_indentation_and_other_lines() {
+        let dir = tempfile::tempdir().unwrap();
+        let p = dir.path().join("notes.md");
+        std::fs::write(
+            &p,
+            "## Tasks\n- [ ] parent\n  - [ ] child to complete\n  - [ ] sibling\n",
+        )
+        .unwrap();
+        complete_task(&p, 3, CompleteOptions { on: d(2026, 5, 10) }).unwrap();
+        let content = std::fs::read_to_string(&p).unwrap();
+        assert_eq!(
+            content,
+            "## Tasks\n- [ ] parent\n  - [x] child to complete ✅ 2026-05-10\n  - [ ] sibling\n"
+        );
     }
 }

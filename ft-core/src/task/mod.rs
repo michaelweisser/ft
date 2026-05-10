@@ -7,6 +7,7 @@ pub mod emoji;
 pub mod format;
 pub mod hierarchy;
 pub mod ops;
+pub mod recurrence;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, Default)]
 pub enum Status {

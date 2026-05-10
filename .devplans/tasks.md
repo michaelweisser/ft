@@ -4,7 +4,7 @@ name: tasks
 title: "Tasks: foundation library + ft tasks CLI"
 status: implementing
 created: 2026-05-09
-updated: 2026-05-09
+updated: 2026-05-10
 ---
 
 # Tasks: foundation library + ft tasks CLI
@@ -81,9 +81,9 @@ everything that follows, so this plan invests in a strong test bed
 - [x] Idempotency: refuses to create an exact duplicate task (same description + same dates) on the same day unless `--force`
 
 ### `ft tasks complete`
-- [ ] `ft tasks complete <selector>` marks one or more tasks done. Selector forms: task `id` (the `🆔 abc123` field), `<file>:<line>`, or interactive picker with `fzf`-style prompt (use `dialoguer` or `inquire`) when ambiguous
-- [ ] Sets done date to today (or `--on <date>`)
-- [ ] If task has `recurrence`, creates the next instance at the original location and marks the current one done — matching plugin behavior. Recurrence semantics in v1 cover daily/weekly/monthly with a clearly-tested whitelist; unsupported patterns error out with the exact unsupported token
+- [x] `ft tasks complete <selector>` marks one or more tasks done. Selector forms: task `id` (the `🆔 abc123` field), `<file>:<line>`, or interactive picker with `fzf`-style prompt (use `dialoguer` or `inquire`) when ambiguous
+- [x] Sets done date to today (or `--on <date>`)
+- [x] If task has `recurrence`, creates the next instance at the original location and marks the current one done — matching plugin behavior. Recurrence semantics in v1 cover daily/weekly/monthly with a clearly-tested whitelist; unsupported patterns error out with the exact unsupported token
 
 ### `ft tasks move` and bulk move
 - [ ] `ft tasks move <selector> --to <file>[#heading]` moves a single task (and its subtasks) to the new location
@@ -584,7 +584,7 @@ moment.js's own permissive behavior. Verified end-to-end against
 and explicit `journal/YYYY` both land at `journal/2026/2026-05-09.md`.
 **238 tests green** (up from 227); clippy + fmt clean.
 
-### Session 6 · 2026-05-09 · planned
+### Session 6 · 2026-05-09 · done
 **Goal:** `ft tasks complete` + selector resolution + recurrence engine (daily/weekly/monthly)
 
 **Scope:**
@@ -624,7 +624,67 @@ and explicit `journal/YYYY` both land at `journal/2026/2026-05-09.md`.
 **Deferred:** richer recurrence (skip, until, count, etc.) — future plan
 once we hit a real case where the user wants it.
 
-**Outcome:** 
+**Outcome:** Session 6 ships `ft tasks complete` end-to-end. New ft-core
+modules: `task::recurrence` (parser + engine for the whitelisted patterns —
+`every [N] day[s]`, `every [N] week[s]`, `every week on <weekday>`,
+`every [N] month[s]`, `every month on the Nth`; case-insensitive; ordinal
+suffixes `1st/2nd/3rd/Nth` accepted; weekday full names + 3-letter abbrevs;
+unsupported tokens including `every year`, `when done`, and
+`every 2 weeks on monday` reject with `RecurrenceError::Unsupported { rule,
+token }` naming the offending substring) and `selector` (three forms:
+`Selector::Id` exact match against `Task.id`, `Selector::FileLine` exact
+relative-path + 1-indexed line with suffix-match support so
+`inbox.md:5` resolves `notes/inbox.md:5`, `Selector::Fuzzy` case-insensitive
+substring against description or path, restricted to non-Done tasks). The
+new `task::ops::complete_task(target_path, line, CompleteOptions { on })`
+reads the target file, parses the line, errors cleanly on
+`LineMissing`/`NotATask`/`AlreadyDone`, marks the task done with the given
+date, and — if the task is recurring — inserts the next instance *above*
+the now-completed line (matching plugin behavior). Anchor preference is
+due > scheduled > start; secondary dates shift by the same delta as the
+primary date; chrono's end-of-month clamping is respected, with
+`MonthOnDay` re-clamped against the destination month so `monthly on the
+31st` advances 2026-01-31 → 2026-02-28 → 2026-03-31. The CLI `tasks
+complete` subcommand wires every flag from the plan: positional
+`<selector>` (optional — when omitted the picker shows all open tasks),
+`--on <date>` (parsed via the same `dates` module so ISO/keywords/relative
+all work; defaults to today), and `--yes` (skips the picker by replacing it
+with an error listing up to 5 candidates so it's pipeline-friendly). Bare
+ID selectors fall back to fuzzy matching when no task has the literal id —
+so `ft tasks complete dog` finds `Walk dog`. The picker uses
+`dialoguer::FuzzySelect` (added with `default-features = false, features =
+["fuzzy-select"]` so we don't pull in the rest of the crate). Stdin TTY
+detection through `is_terminal` triggers the candidate-list error in
+non-TTY contexts so scripts get a clean error rather than hanging on a
+prompt. All error messages use vault-relative paths. Tests: 28
+`task::recurrence` unit tests covering each pattern × edge cases (leap
+day, end-of-month, year rollover, anchor preference, no-anchor error,
+delta-shift consistency), 12 `selector` unit tests (parser
+classification + resolve rules), 8 `task::ops::tests::complete_*` unit
+tests (incl. recurrence integration, file-content snapshots, indentation
+preservation, unsupported-pattern atomicity), 11 `tasks_complete.rs`
+integration tests (id / file:line / fuzzy / `--on` / recurrence /
+already-done / non-match / ambiguous-with-yes / unsupported-recurrence
+non-modification / round-trip create-list-complete-list). **287 → 298
+total tests green** (`4 + 11 + 18 + 46 + 5 + 213 + 1`); clippy clean with
+`-D warnings`; fmt clean. Real-vault smoke against
+`/Users/cmw/git/fortytwo`: created two test tasks (one non-recurring, one
+`every week`) in a temp file inside the vault; `ft tasks complete
+<id>` produced `- [x] … ✅ 2026-05-10` for the non-recurring task and
+inserted `📅 2026-05-17` next instance above the completed `📅 2026-05-10`
+line for the recurring one; cleanup removed the smoke directory.
+Decisions: (a) the next instance is inserted *above* the completed line
+because that's plugin behavior and means `ft tasks list` then sees the
+new instance ahead of the completed one in source order — useful in
+markdown output; (b) selector parser prefers the structured forms
+(`file:line`, then bare ID) and the CLI does an Id→Fuzzy fallback so a
+single-word selector like `dog` keeps working when no `🆔 dog` exists;
+(c) `Fuzzy` resolution skips Done tasks by default (you don't normally
+re-complete a done task by fuzzy match) but `Id` and `FileLine` don't, so
+the CLI's `AlreadyDone` error path is reachable when the user is
+explicit; (d) `ft tasks complete` (no selector) opens the picker over all
+open tasks rather than erroring — feels like the natural "what do I want
+to mark done right now?" affordance.
 
 ### Session 7 · 2026-05-09 · planned
 **Goal:** `ft tasks move` single + bulk-move + dry-run + diff preview + confirmation

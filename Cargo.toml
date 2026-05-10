@@ -29,6 +29,7 @@ tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 comfy-table = "7"
 owo-colors = { version = "4", features = ["supports-colors"] }
 is-terminal = "0.4"
+dialoguer = { version = "0.11", default-features = false, features = ["fuzzy-select"] }
 
 # Dev / test (shared)
 assert_cmd = "2"
