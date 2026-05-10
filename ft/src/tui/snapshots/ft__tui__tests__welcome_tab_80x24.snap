@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+         ██╗    ██╗███████╗██╗      ██████╗ ██████╗ ███╗   ███╗███████╗         
+         ██║    ██║██╔════╝██║     ██╔════╝██╔═══██╗████╗ ████║██╔════╝         
+         ██║ █╗ ██║█████╗  ██║     ██║     ██║   ██║██╔████╔██║█████╗           
+         ██║███╗██║██╔══╝  ██║     ██║     ██║   ██║██║╚██╔╝██║██╔══╝           
+         ╚███╔███╔╝███████╗███████╗╚██████╗╚██████╔╝██║ ╚═╝ ██║███████╗         
+          ╚══╝╚══╝ ╚══════╝╚══════╝ ╚═════╝ ╚═════╝ ╚═╝     ╚═╝╚══════╝         
+                                                                                
+                  to ft — your terminal companion for Obsidian                  
+                                vault: test-vault                               
+               press any key to continue · q to quit · ? for help               
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+                                                                                
+ vault: test-vault  ·  tab: Welcome         not yet refreshed      mode: normal

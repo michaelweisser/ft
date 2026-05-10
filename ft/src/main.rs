@@ -6,6 +6,7 @@ use tracing_subscriber::EnvFilter;
 
 mod cmd;
 mod output;
+mod tui;
 
 #[derive(Parser)]
 #[command(
@@ -38,6 +39,8 @@ enum Commands {
     Vault(cmd::vault::VaultArgs),
     /// Task operations: list, create, complete, move
     Tasks(cmd::tasks::TasksArgs),
+    /// Launch the interactive terminal UI
+    Tui(cmd::tui::TuiArgs),
     /// Generate shell completion script
     Completions(cmd::completions::CompletionsArgs),
     /// Render man pages from the clap definition
@@ -66,6 +69,7 @@ fn main() -> ExitCode {
     let result: Result<ExitCode> = match cli.command {
         Commands::Vault(args) => cmd::vault::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Tasks(args) => cmd::tasks::run(args, vault),
+        Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
     };

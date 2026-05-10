@@ -33,6 +33,8 @@ owo-colors = { version = "4", features = ["supports-colors"] }
 is-terminal = "0.4"
 dialoguer = { version = "0.11", default-features = false, features = ["fuzzy-select"] }
 similar = "2"
+ratatui = "0.29"
+crossterm = "0.28"
 
 # Dev / test (shared)
 assert_cmd = "2"

@@ -2,7 +2,7 @@
 id: 002
 name: tui
 title: Interactive TUI for vault management
-status: ready
+status: implementing
 created: 2026-05-09
 updated: 2026-05-10
 ---
@@ -29,17 +29,17 @@ date and priority — exactly what matters at the start of a work session.
 ## Acceptance Criteria
 
 ### Foundation
-- [ ] `ft tui` subcommand launches the TUI; exits cleanly on `q` or Ctrl+C
-- [ ] Single binary; the subcommand is registered alongside the others from plan 001
-- [ ] Renders correctly in 80x24 minimum, scales gracefully up to large terminals
-- [ ] Dark theme only (light mode and `--theme` flag are v2)
-- [ ] `ft tui` reuses the same vault discovery and config as the CLI from plan 001
-- [ ] `?` opens a static help overlay listing all keybindings; `Esc` or `?` closes it
+- [x] `ft tui` subcommand launches the TUI; exits cleanly on `q` or Ctrl+C
+- [x] Single binary; the subcommand is registered alongside the others from plan 001
+- [x] Renders correctly in 80x24 minimum, scales gracefully up to large terminals
+- [x] Dark theme only (light mode and `--theme` flag are v2)
+- [x] `ft tui` reuses the same vault discovery and config as the CLI from plan 001
+- [x] `?` opens a static help overlay listing all keybindings; `Esc` or `?` closes it
 
 ### Tab system
-- [ ] Top bar shows tab names; active tab is visually highlighted
-- [ ] Switch tabs with `Tab` / `Shift-Tab` or number keys `1` / `2`
-- [ ] Tabs implement a `Tab` trait so adding new ones requires no surgery to the core loop:
+- [x] Top bar shows tab names; active tab is visually highlighted
+- [x] Switch tabs with `Tab` / `Shift-Tab` or number keys `1` / `2`
+- [x] Tabs implement a `Tab` trait so adding new ones requires no surgery to the core loop:
   ```rust
   trait Tab {
       fn title(&self) -> &str;
@@ -50,12 +50,12 @@ date and priority — exactly what matters at the start of a work session.
       fn refresh(&mut self, ctx: &mut TabCtx) -> Result<()>;
   }
   ```
-- [ ] Bottom status bar shows: vault name, current tab name, last-refresh timestamp, mode hint (normal / edit / help)
+- [x] Bottom status bar shows: vault name, current tab name, last-refresh timestamp, mode hint (normal / edit / help)
 
 ### Welcome tab
-- [ ] First tab shown on launch
-- [ ] Displays "Welcome" in ASCII art (or a styled block-letter banner)
-- [ ] No interactive elements; any key press switches to the Tasks tab
+- [x] First tab shown on launch
+- [x] Displays "Welcome" in ASCII art (or a styled block-letter banner)
+- [x] No interactive elements; any key press switches to the Tasks tab
 
 ### Tasks tab — layout
 - [ ] Split layout: fixed-width left sidebar (~25 chars) + right viewport filling the rest
@@ -144,9 +144,26 @@ only the sidebar clock cell redraws.
 - `docs/tui.md` reference and manual test checklist
 
 ## Sessions
-### Session 1 · 2026-05-10 · planned
+### Session 1 · 2026-05-10 · done
 **Goal:** TUI foundation: ft tui subcommand, event loop, Tab framework, top tab bar, status bar, Welcome tab with ASCII art, exit/switch/help keybindings
-**Outcome:** 
+**Outcome:** Added `ratatui 0.29` + `crossterm 0.28` to the workspace and wired
+the `ft tui` subcommand. New module tree under `ft/src/tui/`: `app.rs` (App
+struct, event loop, global keymap), `event.rs` (typed Event enum + channel-
+backed `EventStream` with 1s tick), `tab.rs` (Tab trait with `title`,
+`on_focus`, `on_blur`, `handle_event`, `render`, `refresh`; `EventOutcome` with
+`Consumed`/`NotHandled`/`SwitchTab(idx)`/`Quit`; `TabCtx` carrying the vault),
+`ui.rs` (top tab bar, three-cell status bar, centered help overlay with
+`Clear`), and `tabs/{welcome,tasks}.rs`. Welcome tab shows a cyan block-letter
+"WELCOME" banner with vault name and any-key forwards to the Tasks tab.
+Tasks tab is a placeholder for session 2. Global keys: `q`/`Ctrl+C` quit, `?`
+toggles help, `Tab`/`Shift+Tab` cycle tabs, `1`/`2` jump by index. Help overlay
+swallows all keys except its own dismiss keys. Reserved API surface (`Quit`,
+`Consumed`, `refresh`, `last_refresh`) is annotated with `#[allow(dead_code)]`
+to keep the build warning-free without removing the contract. 8 tests added:
+3 snapshot tests via `TestBackend` + `insta` (welcome 80x24, help overlay,
+tasks placeholder) plus 5 behavioural tests for the global keymap and tab
+switching. `cargo test --workspace`, `cargo clippy --workspace --all-targets`,
+and `cargo fmt --all -- --check` all clean.
 
 ### Session 2 · 2026-05-10 · planned
 **Goal:** Tasks tab skeleton: sidebar layout with live clock and view dropdown, viewport split, stub Search view, inner view abstraction
@@ -167,4 +184,3 @@ only the sidebar clock cell redraws.
 ### Session 6 · 2026-05-10 · planned
 **Goal:** Performance budgets on 5k-note fixture, fill remaining snapshot tests, help overlay audit, no-warnings cleanup, real-vault smoke check
 **Outcome:** 
-

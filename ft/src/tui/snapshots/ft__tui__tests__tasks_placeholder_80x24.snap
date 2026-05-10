@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+┌──────────────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│                                     Tasks                                    │
+│                                                                              │
+│           (coming next session — sidebar, Search view, quick keys)           │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks           not yet refreshed      mode: normal
