@@ -23,16 +23,47 @@ pub struct Config {
     pub default_vault: Option<String>,
     /// Default file for new tasks, relative to vault root.
     pub default_task_location: Option<String>,
-    /// Path of the daily notes folder, relative to vault root.
-    pub daily_notes_path: Option<String>,
-    /// moment.js format string for daily note filenames (e.g. `"YYYY-MM-DD"`).
-    pub daily_notes_format: Option<String>,
+    /// How to resolve the daily-note path. Pick exactly one source.
+    #[serde(default)]
+    pub daily_notes: DailyNotes,
     /// Glob patterns (relative to vault root) to exclude from scanning.
     #[serde(default)]
     pub ignored_paths: Vec<String>,
     /// Named task queries (presets). Keys are preset names; values are DSL strings.
     #[serde(default)]
     pub presets: HashMap<String, String>,
+}
+
+/// Where the daily-note path comes from.
+///
+/// - `Core` reads `<vault>/.obsidian/daily-notes.json` (Obsidian's built-in
+///   "Daily notes" core plugin).
+/// - `PeriodicNotes` reads `<vault>/.obsidian/plugins/periodic-notes/data.json`.
+///   Only the `daily` block is consulted.
+/// - `Explicit` ignores both plugins and uses [`DailyNotes::path`] /
+///   [`DailyNotes::format`] verbatim. Both fields support moment.js patterns,
+///   so `path = "journal/YYYY"` resolves to `journal/2026/…` automatically.
+#[derive(Debug, Clone, Copy, Default, Deserialize, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum DailySource {
+    #[default]
+    Core,
+    PeriodicNotes,
+    Explicit,
+}
+
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct DailyNotes {
+    #[serde(default)]
+    pub source: DailySource,
+    /// Folder pattern, used only when `source = "explicit"`. Supports moment.js
+    /// tokens (`YYYY`, `MM`, `[literal]`, etc.) and is resolved against the
+    /// target date.
+    pub path: Option<String>,
+    /// Filename pattern (without `.md`), used only when `source = "explicit"`.
+    /// Defaults to `YYYY-MM-DD` when unset.
+    pub format: Option<String>,
 }
 
 #[derive(Debug)]
@@ -112,39 +143,89 @@ mod tests {
         let user = tmp.child("user.toml");
         user.write_str(
             r#"
-daily_notes_path = "Journal"
-daily_notes_format = "YYYY-MM-DD"
+[daily_notes]
+source = "explicit"
+path = "Journal"
+format = "YYYY-MM-DD"
 "#,
         )
         .unwrap();
 
         let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
-        assert_eq!(lc.config.daily_notes_path.as_deref(), Some("Journal"));
-        assert_eq!(lc.config.daily_notes_format.as_deref(), Some("YYYY-MM-DD"));
+        assert_eq!(lc.config.daily_notes.source, DailySource::Explicit);
+        assert_eq!(lc.config.daily_notes.path.as_deref(), Some("Journal"));
+        assert_eq!(lc.config.daily_notes.format.as_deref(), Some("YYYY-MM-DD"));
         assert!(lc.sources[0].present);
         assert!(!lc.sources[1].present);
+    }
+
+    #[test]
+    fn daily_source_defaults_to_core() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert_eq!(lc.config.daily_notes.source, DailySource::Core);
+        assert!(lc.config.daily_notes.path.is_none());
+    }
+
+    #[test]
+    fn daily_source_periodic_notes() {
+        let tmp = TempDir::new().unwrap();
+        let user = tmp.child("user.toml");
+        user.write_str(
+            r#"
+[daily_notes]
+source = "periodic-notes"
+"#,
+        )
+        .unwrap();
+        let lc = load(user.path(), &tmp.path().join("no-vault.toml")).unwrap();
+        assert_eq!(lc.config.daily_notes.source, DailySource::PeriodicNotes);
     }
 
     #[test]
     fn vault_config_wins_over_user() {
         let tmp = TempDir::new().unwrap();
         let user = tmp.child("user.toml");
-        user.write_str(r#"daily_notes_path = "from-user""#).unwrap();
+        user.write_str(
+            r#"
+[daily_notes]
+source = "explicit"
+path = "from-user"
+"#,
+        )
+        .unwrap();
 
         let vault = tmp.child("vault.toml");
         vault
-            .write_str(r#"daily_notes_path = "from-vault""#)
+            .write_str(
+                r#"
+[daily_notes]
+source = "explicit"
+path = "from-vault"
+"#,
+            )
             .unwrap();
 
         let lc = load(user.path(), vault.path()).unwrap();
-        assert_eq!(lc.config.daily_notes_path.as_deref(), Some("from-vault"));
+        assert_eq!(lc.config.daily_notes.path.as_deref(), Some("from-vault"));
     }
 
     #[test]
     fn vault_config_merges_non_overlapping_keys() {
         let tmp = TempDir::new().unwrap();
         let user = tmp.child("user.toml");
-        user.write_str(r#"daily_notes_path = "Journal""#).unwrap();
+        user.write_str(
+            r#"
+[daily_notes]
+source = "explicit"
+path = "Journal"
+"#,
+        )
+        .unwrap();
 
         let vault = tmp.child("vault.toml");
         vault
@@ -152,7 +233,7 @@ daily_notes_format = "YYYY-MM-DD"
             .unwrap();
 
         let lc = load(user.path(), vault.path()).unwrap();
-        assert_eq!(lc.config.daily_notes_path.as_deref(), Some("Journal"));
+        assert_eq!(lc.config.daily_notes.path.as_deref(), Some("Journal"));
         assert_eq!(lc.config.default_task_location.as_deref(), Some("Tasks.md"));
     }
 

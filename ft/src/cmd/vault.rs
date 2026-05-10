@@ -32,8 +32,15 @@ pub fn run(_args: VaultArgs, vault_flag: Option<PathBuf>) -> Result<()> {
         "default_task_location",
         cfg.default_task_location.as_deref(),
     );
-    print_opt("daily_notes_path", cfg.daily_notes_path.as_deref());
-    print_opt("daily_notes_format", cfg.daily_notes_format.as_deref());
+    println!("  daily_notes:");
+    let source_label = match cfg.daily_notes.source {
+        ft_core::config::DailySource::Core => "core",
+        ft_core::config::DailySource::PeriodicNotes => "periodic-notes",
+        ft_core::config::DailySource::Explicit => "explicit",
+    };
+    println!("    source = {:?}", source_label);
+    print_opt("    path", cfg.daily_notes.path.as_deref());
+    print_opt("    format", cfg.daily_notes.format.as_deref());
     if cfg.ignored_paths.is_empty() {
         println!("  ignored_paths = []");
     } else {

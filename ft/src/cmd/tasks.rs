@@ -523,13 +523,8 @@ fn resolve_target_path(args: &CreateArgs, vault: &Vault, today: NaiveDate) -> Re
         return Ok(p);
     }
 
-    let cfg = daily::load(&vault.path).map_err(|e| {
-        anyhow!(
-            "{e}\n\nhint: configure Obsidian's core \"Daily notes\" plugin, or pass --file <PATH>"
-        )
-    })?;
-    daily::resolve_path(&vault.path, &cfg, today)
-        .context("could not resolve today's daily note path")
+    daily::resolve_daily_path(&vault.path, &vault.config.config.daily_notes, today)
+        .map_err(|e| anyhow!("{e}"))
 }
 
 fn open_editor(file: &std::path::Path, line: usize) -> Result<()> {

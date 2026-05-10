@@ -71,7 +71,7 @@ everything that follows, so this plan invests in a strong test bed
 ### `ft tasks create`
 - [x] Positional arg is the description; flags add metadata: `--due`, `--scheduled`, `--start`, `--priority`, `--tag` (repeatable), `--recurrence`, `--id`, `--depends-on`
 - [x] Date parsing accepts ISO (`2026-05-10`), relative (`+3d`, `tomorrow`), and natural language (`next monday`) — `chrono` + `chrono-english`
-- [x] Default location: today's daily note resolved from the daily-notes core plugin config (`<vault>/.obsidian/daily-notes.json`). If that file doesn't exist (templater not yet integrated), fail with a message that tells the user to either create it or pass `--file`
+- [x] Default location: today's daily note resolved from a configurable source. `[daily_notes].source` in ft's config picks one of `core` (Obsidian's built-in plugin, default), `periodic-notes` (community plugin), or `explicit` (`path` + `format` keys, both supporting moment.js patterns like `journal/YYYY`). If the chosen source can't be resolved, fail with a message naming alternative sources and `--file`
 - [x] `--file <path>` overrides location (relative to vault root)
 - [x] `--under-heading "<heading>"` inserts at the end of the section under that heading; creates the heading at file end if missing
 - [x] `--at-line N` inserts at a specific 1-indexed line
@@ -564,6 +564,25 @@ passed via `--tag` are appended as `#tag` to the description (deduped) so
 they round-trip cleanly through the parser's tag index; (c) duplicate
 detection ignores status — a done duplicate is still a duplicate, matching
 "don't accidentally re-add the same thing" semantics.
+
+**Post-session refactor (same day):** Daily-note resolution generalized from
+hard-coded core-plugin lookup to a `[daily_notes]` config table with three
+sources: `core` (default; reads `.obsidian/daily-notes.json`),
+`periodic-notes` (reads `.obsidian/plugins/periodic-notes/data.json`'s
+`daily` block, respects `enabled = false`, defaults empty `format` to
+`YYYY-MM-DD`), and `explicit` (uses `path` + `format` keys directly, both
+supporting moment.js patterns so `path = "journal/YYYY"` keeps working as
+the year rolls over). The flat `daily_notes_path` / `daily_notes_format`
+keys were replaced by the table. `translate_format` relaxed from "reject
+any unrecognized letter run" to "pass through anything that isn't a known
+token", with a small reserved-tokens list (currently `Q`/`Qo`) that still
+errors loudly — this lets ordinary folder names (`journal`, `notes`,
+`inbox`) appear in `path` patterns without bracket escaping, matching
+moment.js's own permissive behavior. Verified end-to-end against
+`/Users/cmw/git/fortytwo` for all three sources: core lands at
+`journal/2024/2026-05-09.md` (the user's stale core config), periodic-notes
+and explicit `journal/YYYY` both land at `journal/2026/2026-05-09.md`.
+**238 tests green** (up from 227); clippy + fmt clean.
 
 ### Session 6 · 2026-05-09 · planned
 **Goal:** `ft tasks complete` + selector resolution + recurrence engine (daily/weekly/monthly)
