@@ -40,6 +40,26 @@ impl EventStream {
     pub fn next(&self) -> Result<Event> {
         self.rx.recv().map_err(Into::into)
     }
+
+    /// Discard every event received during `window`. Used after returning
+    /// from `$EDITOR` so terminal-response escape sequences (e.g. DCS
+    /// `XTGETTCAP` replies) and any keys typed during the editor session
+    /// don't leak into the next read — without this, the `/` byte of a
+    /// DCS reply puts the search view into edit mode and the rest of the
+    /// reply gets typed into the query buffer.
+    pub fn drain(&self, window: Duration) {
+        let deadline = std::time::Instant::now() + window;
+        loop {
+            // Empty the channel of everything currently queued.
+            while self.rx.try_recv().is_ok() {}
+            if std::time::Instant::now() >= deadline {
+                return;
+            }
+            // Yield so the background crossterm thread has a chance to
+            // ingest more bytes from stdin and push them through.
+            std::thread::sleep(Duration::from_millis(20));
+        }
+    }
 }
 
 fn crossterm_loop(tx: Sender<Event>, tick_rate: Duration) {

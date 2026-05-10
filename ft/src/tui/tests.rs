@@ -876,6 +876,128 @@ fn perf_first_render_5k_vault_under_budget() -> Result<()> {
     Ok(())
 }
 
+// --- session 6 follow-ups: tag round-trip + editor-exit drain ---------------
+
+#[test]
+fn edit_popup_saves_tag_changes_back_to_description() -> Result<()> {
+    // Tags are derived from the description on parse, so the popup has to
+    // rewrite the description to persist tag edits. Regression for: "tag
+    // changes don't get saved" after using `e`.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay rent #old 📅 2026-05-08\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    // Jump straight to the tags field (description, due, scheduled, priority, tags).
+    for _ in 0..4 {
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..20 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "work urgent".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+
+    let body = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    assert!(
+        body.contains("#work"),
+        "new tag should be embedded in description: \n{body}"
+    );
+    assert!(
+        body.contains("#urgent"),
+        "new tag should be embedded in description: \n{body}"
+    );
+    assert!(
+        !body.contains("#old"),
+        "tag removed from popup tags field should be stripped: \n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn edit_popup_emptying_tags_field_removes_all_tags() -> Result<()> {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("tasks.md"),
+        "- [ ] Pay rent #work #urgent 📅 2026-05-08\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    for _ in 0..4 {
+        app.dispatch(Event::Key(KeyEvent::new(KeyCode::Tab, KeyModifiers::NONE)))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..40 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('s'),
+        KeyModifiers::CONTROL,
+    )))?;
+
+    let body = std::fs::read_to_string(dir.path().join("test-vault/tasks.md")).unwrap();
+    assert!(
+        !body.contains('#'),
+        "clearing the tags field should strip inline tags: \n{body}"
+    );
+    assert!(
+        body.contains("Pay rent"),
+        "description text must survive:\n{body}"
+    );
+    Ok(())
+}
+
+#[test]
+fn event_stream_drain_consumes_pending_events() {
+    use crate::tui::event::EventStream;
+    use std::time::Duration;
+
+    // Standing up a real EventStream relies on a TTY for the crossterm
+    // poll loop. In a non-tty test environment poll fails fast and the
+    // background thread exits — drain still has to behave (no events to
+    // consume, returns within the window without spinning).
+    let stream = EventStream::new(Duration::from_secs(60)); // long tick so no ticks queue
+    let start = std::time::Instant::now();
+    stream.drain(Duration::from_millis(80));
+    let elapsed = start.elapsed();
+    assert!(
+        elapsed >= Duration::from_millis(60),
+        "drain should consume the full window: {elapsed:?}"
+    );
+    assert!(
+        elapsed < Duration::from_millis(400),
+        "drain should not block past the window: {elapsed:?}"
+    );
+}
+
+// --- session 6: perf budgets (re-anchor so file order is stable) ------------
+
 #[test]
 fn perf_keystrokes_5k_vault_under_budget() -> Result<()> {
     if !perf_tests_enabled() {

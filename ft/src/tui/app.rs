@@ -79,7 +79,7 @@ impl App {
             // Service any side-effect requests the view raised. Done outside
             // `handle_event` so the App owns the Terminal during suspend.
             if let Some(req) = self.pending_request.take() {
-                self.service_request(terminal, req)?;
+                self.service_request(terminal, &events, req)?;
             }
         }
     }
@@ -210,12 +210,23 @@ impl App {
         Ok(())
     }
 
-    fn service_request(&mut self, terminal: &mut Tui, req: AppRequest) -> Result<()> {
+    fn service_request(
+        &mut self,
+        terminal: &mut Tui,
+        events: &EventStream,
+        req: AppRequest,
+    ) -> Result<()> {
         match req {
             AppRequest::OpenInEditor { path, line } => {
                 suspend_terminal(terminal).context("could not suspend terminal for $EDITOR")?;
                 let status = spawn_editor(&path, line);
                 restore_terminal(terminal).context("could not restore terminal after $EDITOR")?;
+                // Terminals often emit response sequences (DA1, DCS replies
+                // for XTGETTCAP) when raw mode flips back on, and the user
+                // may have typed during the editor session. Drain so the
+                // next `events.next()` returns a genuine keypress and not
+                // a `/` from a DCS reply that puts us into query-edit mode.
+                events.drain(Duration::from_millis(120));
                 terminal.clear()?;
                 // Whatever the editor did, force a refresh so the row reflects
                 // the on-disk state.

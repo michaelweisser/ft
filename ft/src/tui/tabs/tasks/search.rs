@@ -201,6 +201,44 @@ fn parse_tags_field(s: &str) -> Vec<String> {
         .collect()
 }
 
+/// Rewrite `description` so its inline `#tag` words exactly match `tags`.
+///
+/// `Task.tags` is a *derived* index extracted from the description on parse —
+/// the serializer never writes tags as a separate field. To persist tag edits
+/// from the popup we have to strip the old inline tags from the description
+/// and re-append the ones the user wants.
+fn merge_tags_into_description(description: &str, tags: &[String]) -> String {
+    let mut kept: Vec<&str> = Vec::new();
+    for word in description.split_whitespace() {
+        if !is_tag_word(word) {
+            kept.push(word);
+        }
+    }
+    let mut out = kept.join(" ");
+    for tag in tags {
+        let bare = tag.trim_start_matches('#');
+        if bare.is_empty() {
+            continue;
+        }
+        if !out.is_empty() {
+            out.push(' ');
+        }
+        out.push('#');
+        out.push_str(bare);
+    }
+    out
+}
+
+fn is_tag_word(w: &str) -> bool {
+    let Some(rest) = w.strip_prefix('#') else {
+        return false;
+    };
+    !rest.is_empty()
+        && rest
+            .chars()
+            .all(|c| c.is_alphanumeric() || matches!(c, '_' | '-' | '/'))
+}
+
 fn parse_optional_date(s: &str, today: NaiveDate) -> Result<Option<NaiveDate>, String> {
     let trimmed = s.trim();
     if trimmed.is_empty() {
@@ -937,8 +975,13 @@ impl SearchView {
             };
             let recurrence = popup.recurrence.text.trim();
             let recurrence = (!recurrence.is_empty()).then(|| recurrence.to_string());
-            let description = popup.description.text.trim().to_string();
+            let raw_description = popup.description.text.trim().to_string();
             let tags = parse_tags_field(&popup.tags.text);
+            // Description carries inline `#tag` words; rewrite it so the
+            // popup's tag field is the source of truth on save. Without this
+            // `t.tags = ...` is a no-op (tags are re-derived from the
+            // description on parse).
+            let description = merge_tags_into_description(&raw_description, &tags);
             (description, due, scheduled, priority, tags, recurrence)
         };
 
