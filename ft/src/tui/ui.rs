@@ -130,6 +130,7 @@ const HELP_LINES: &[(&str, &str)] = &[
     ("e", "open edit popup"),
     ("Enter", "open task in $EDITOR"),
     ("R", "reload vault"),
+    ("Ctrl+W / Ctrl+⌫", "delete previous word"),
     ("Esc", "close overlay"),
 ];
 

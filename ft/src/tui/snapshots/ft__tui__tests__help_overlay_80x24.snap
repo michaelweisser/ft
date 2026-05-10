@@ -1,5 +1,6 @@
 ---
 source: ft/src/tui/tests.rs
+assertion_line: 98
 expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
@@ -21,8 +22,8 @@ expression: frame
                p│  e                 open edit popup           │p               
                 │  Enter             open task in $EDITOR      │                
                 │  R                 reload vault              │                
+                │  Ctrl+W / Ctrl+⌫   delete previous word      │                
                 │  Esc               close overlay             │                
-                │                                              │                
                 └──────────────────────────────────────────────┘                
                                                                                 
  vault: test-vault  ·  tab: Welcome         not yet refreshed        mode: help

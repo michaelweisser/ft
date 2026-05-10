@@ -770,6 +770,7 @@ const EXPECTED_HELP_LABELS: &[&str] = &[
     "e",
     "Enter",
     "R",
+    "Ctrl+W / Ctrl+⌫",
     "Esc",
 ];
 
@@ -872,6 +873,111 @@ fn perf_first_render_5k_vault_under_budget() -> Result<()> {
         "first render took {:?}; budget {budget_ms}ms (4x of 500ms target). \
          Run --release for tight timing.",
         elapsed
+    );
+    Ok(())
+}
+
+// --- session 6 follow-ups: ctrl+backspace word-delete in edit fields --------
+
+#[test]
+fn ctrl_backspace_deletes_word_in_query_bar() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+
+    // Open the query bar and replace its contents with a known string.
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "alpha beta gamma".chars() {
+        app.dispatch(key(c))?;
+    }
+
+    // Ctrl+Backspace should remove "gamma" (the trailing word).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Backspace,
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("alpha beta "),
+        "after Ctrl+Backspace the trailing word should be gone:\n{frame}"
+    );
+    assert!(
+        !frame.contains("gamma"),
+        "gamma should be deleted:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn ctrl_w_deletes_word_in_query_bar() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('/'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    for _ in 0..200 {
+        app.dispatch(Event::Key(KeyEvent::new(
+            KeyCode::Backspace,
+            KeyModifiers::NONE,
+        )))?;
+    }
+    for c in "foo bar".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('w'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    // The query bar is the line immediately after the top tab bar.
+    let query_line = frame
+        .lines()
+        .find(|l| l.contains("foo"))
+        .expect("query bar should still contain `foo`");
+    assert!(
+        !query_line.contains("bar"),
+        "bar should be deleted from query bar:\n{query_line}"
+    );
+    Ok(())
+}
+
+#[test]
+fn ctrl_backspace_deletes_word_in_edit_popup_field() -> Result<()> {
+    let (_dir, vault) = populated_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('e'))?;
+    // Focus starts on description, which holds "Pay rent". Ctrl+Backspace
+    // should erase "rent" but leave "Pay ".
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::End, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Backspace,
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("Pay "),
+        "Pay should remain in the description field:\n{frame}"
+    );
+    // The word "rent" only appears in the description column of the
+    // background task list (which is still visible to the left/right of
+    // the popup). Make sure it's no longer inside the popup's
+    // description value cell — check that the line right of "description :"
+    // doesn't contain "rent".
+    let popup_line = frame
+        .lines()
+        .find(|l| l.contains("description :"))
+        .expect("popup description row missing");
+    assert!(
+        !popup_line.contains("rent"),
+        "rent should be deleted from the description field:\n{popup_line}"
     );
     Ok(())
 }

@@ -22,8 +22,8 @@ expression: frame
 │               │  e                 open edit popup           │               │
 │               │  Enter             open task in $EDITOR      │               │
 │               │  R                 reload vault              │               │
+│               │  Ctrl+W / Ctrl+⌫   delete previous word      │               │
 │               │  Esc               close overlay             │               │
-│               │                                              │               │
 │               └──────────────────────────────────────────────┘               │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
  vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]        mode: help

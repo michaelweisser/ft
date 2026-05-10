@@ -327,6 +327,27 @@ impl EditBuffer {
     fn end(&mut self) {
         self.cursor = self.text.chars().count();
     }
+
+    /// Delete from the cursor leftward to the start of the previous word.
+    /// Matches the bash/readline `unix-word-rubout` behavior: skip trailing
+    /// whitespace, then skip non-whitespace, then erase the span.
+    fn delete_word_backward(&mut self) {
+        if self.cursor == 0 {
+            return;
+        }
+        let chars: Vec<char> = self.text.chars().collect();
+        let mut i = self.cursor;
+        while i > 0 && chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        while i > 0 && !chars[i - 1].is_whitespace() {
+            i -= 1;
+        }
+        let start_byte: usize = chars[..i].iter().map(|c| c.len_utf8()).sum();
+        let end_byte: usize = chars[..self.cursor].iter().map(|c| c.len_utf8()).sum();
+        self.text.replace_range(start_byte..end_byte, "");
+        self.cursor = i;
+    }
 }
 
 impl SearchView {
@@ -927,6 +948,14 @@ impl SearchView {
             (KeyCode::BackTab, _) => popup.focus = popup.focus.prev(),
             (KeyCode::Down, _) => popup.focus = popup.focus.next(),
             (KeyCode::Up, _) => popup.focus = popup.focus.prev(),
+            (KeyCode::Backspace, m)
+                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+            {
+                popup.focused_buffer_mut().delete_word_backward();
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                popup.focused_buffer_mut().delete_word_backward();
+            }
             (KeyCode::Backspace, _) => popup.focused_buffer_mut().backspace(),
             (KeyCode::Delete, _) => popup.focused_buffer_mut().delete(),
             (KeyCode::Left, _) => popup.focused_buffer_mut().left(),
@@ -1008,6 +1037,18 @@ impl SearchView {
             }
             (KeyCode::Enter, _) => {
                 self.apply_edit(ctx);
+            }
+            (KeyCode::Backspace, m)
+                if m.contains(KeyModifiers::CONTROL) || m.contains(KeyModifiers::ALT) =>
+            {
+                if let Some(b) = self.edit_state.as_mut() {
+                    b.delete_word_backward();
+                }
+            }
+            (KeyCode::Char('w'), KeyModifiers::CONTROL) => {
+                if let Some(b) = self.edit_state.as_mut() {
+                    b.delete_word_backward();
+                }
             }
             (KeyCode::Backspace, _) => {
                 if let Some(b) = self.edit_state.as_mut() {
