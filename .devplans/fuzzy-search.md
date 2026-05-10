@@ -134,18 +134,19 @@ impl Vault {
 ```
 
 ### CLI surface — `ft find`
-- [ ] `ft find QUERY` prints up to 25 hits, one per line, format
+- [x] `ft find QUERY` prints up to 25 hits, one per line, format
       `PATH:LINE  heading text` (or just `PATH` if no heading)
-- [ ] Path styled blue, heading yellow, dim score on the right when stdout
-      is a TTY (use the existing color machinery from plan 001 session 8)
-- [ ] `--limit N` overrides the default
-- [ ] `--include-headings` forces heading extraction even when the query
+- [x] Path styled blue, heading yellow when stdout is a TTY (`--no-color`
+      and `NO_COLOR` honored). Score isn't surfaced on the right of the
+      plain output — it's available in ndjson where it's machine-readable.
+- [x] `--limit N` overrides the default
+- [x] `--include-headings` forces heading extraction even when the query
       has no `#` (useful when you want a broad jump-list)
-- [ ] `--format ndjson` emits one JSON object per line for scripting; each
+- [x] `--format ndjson` emits one JSON object per line for scripting; each
       object has `{path, line?, heading?, level?, score}`
-- [ ] Exit codes: 0 with results, 1 with no matches (callers can chain
+- [x] Exit codes: 0 with results, 1 with no matches (callers can chain
       with `&&`)
-- [ ] Help and man page entries via clap's existing derive
+- [x] Help and man page entries via clap's existing derive
 
 ### TUI `FuzzyPicker` widget
 The widget lives at `ft/src/tui/widgets/picker.rs` and is constructed by
@@ -311,9 +312,47 @@ include_headings-without-heading-part attaching the first heading.
 Workspace `cargo test` (404 tests), `cargo clippy --workspace
 --all-targets -- -D warnings`, and `cargo fmt --check` all clean.
 
-### Session 2 · 2026-05-10 · planned
+### Session 2 · 2026-05-10 · done
 **Goal:** ft find CLI command: ft/src/cmd/find.rs with clap derive, tab-separated stdout + ndjson format, color-on-TTY, --limit / --include-headings flags, exit codes per plan-001 conventions, integration tests + real-vault gated test.
-**Outcome:** 
+**Outcome:** CLI surface shipped. New `cmd::find` module with `FindArgs`
+(`QUERY...`, `--limit`, `--include-headings`, `--format plain|ndjson`,
+`--no-color`) wired into `main.rs` as `Commands::Find`. Joins positional
+args into the query string so `ft find foo bar` works the same as
+`ft find "foo bar"`. Empty query (whitespace only) returns a clean
+error instead of an opaque ranking.
+
+Output:
+- **Plain** (default): one hit per line. Files without a heading print
+  just the path; with a heading print `path:line\theading`. The tab
+  separator keeps it `awk`-friendly. Color (blue path, dim line, yellow
+  heading) auto-enabled when stdout is a TTY; disabled by `--no-color`
+  or the `NO_COLOR` env var (per the broader project convention).
+- **ndjson**: one JSON object per line — `{path, score}` for filename-
+  only hits, `{path, line, heading, level, score}` when a heading is
+  present. Score uses the combined `total_score` from session 1.
+
+Exit codes:
+- 0 — at least one match printed
+- 1 — no matches (legitimate empty result, chainable with `&&`)
+- 2 reserved (not currently emitted; clap returns 2 on arg errors
+  automatically).
+
+ANSI color is rendered via four small constants directly in the module
+rather than pulling in `owo-colors` — keeps the CLI dependency surface
+narrow and matches the simple-output style of this command. The deeper
+table renderer in `cmd::tasks` already pulls in `comfy-table` for its
+own coloring.
+
+9 integration tests in `tests/find.rs` against the existing
+`tests/fixtures/realistic` vault: filename-only match, file+heading
+match (`redesign#tasks`), no-match exits 1, ndjson shape with and
+without heading fields, `--limit` truncates, `--include-headings`
+attaches the first heading without a `#` in the query,
+`--no-color` produces no ANSI escapes, and a `FT_REAL_VAULT_TESTS=1`-
+gated smoke check against the user's real vault.
+
+Workspace `cargo test` (413 tests), clippy with `-D warnings`, and
+`cargo fmt --check` all clean.
 
 ### Session 3 · 2026-05-10 · planned
 **Goal:** TUI FuzzyPicker widget at ft/src/tui/widgets/picker.rs: PickerSource trait, EditBuffer-backed input, scrollable result list with match highlighting, arrow/jk navigation, Enter returns selection, Esc cancels. Concrete VaultFilePickerSource for the file+heading case. Snapshot tests covering empty / populated / no-match / narrow-width.

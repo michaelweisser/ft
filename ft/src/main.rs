@@ -39,6 +39,8 @@ enum Commands {
     Vault(cmd::vault::VaultArgs),
     /// Task operations: list, create, complete, move
     Tasks(cmd::tasks::TasksArgs),
+    /// Fuzzy-find notes and headings (`text` or `text#heading`)
+    Find(cmd::find::FindArgs),
     /// Launch the interactive terminal UI
     Tui(cmd::tui::TuiArgs),
     /// Generate shell completion script
@@ -79,6 +81,7 @@ fn main() -> ExitCode {
     let result: Result<ExitCode> = match cli.command {
         Commands::Vault(args) => cmd::vault::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Tasks(args) => cmd::tasks::run(args, vault),
+        Commands::Find(args) => cmd::find::run(args, vault),
         Commands::Tui(args) => cmd::tui::run(args, vault).map(|_| ExitCode::SUCCESS),
         Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
         Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
