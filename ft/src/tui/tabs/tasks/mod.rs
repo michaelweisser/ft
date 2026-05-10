@@ -137,9 +137,19 @@ impl Tab for TasksTab {
     }
 
     fn handle_event(&mut self, ev: Event, ctx: &mut TabCtx) -> Result<EventOutcome> {
-        // Sidebar dropdown navigation. ↑/↓ always belongs to the dropdown so
-        // the user can switch views without leaving the tab. Session 3+ may
-        // need to reconsider this when the Search view wants its own j/k.
+        // The active view gets first dibs — its selection model owns the same
+        // keys (↑/↓/Enter) as the sidebar dropdown. The dropdown only handles
+        // these keys when the view returns NotHandled (e.g. while the search
+        // list is empty or the view has no opinion).
+        let view_outcome = if let Some(v) = self.views.get_mut(self.active_view) {
+            v.handle_event(ev.clone(), ctx)?
+        } else {
+            EventOutcome::NotHandled
+        };
+        if view_outcome != EventOutcome::NotHandled {
+            return Ok(view_outcome);
+        }
+
         if let Event::Key(k) = ev {
             match k.code {
                 KeyCode::Up => {
@@ -151,20 +161,12 @@ impl Tab for TasksTab {
                     return Ok(EventOutcome::Consumed);
                 }
                 KeyCode::Enter => {
-                    // No-op for now (one view); future-proofs against the
-                    // dropdown opening into a popover.
                     return Ok(EventOutcome::Consumed);
                 }
                 _ => {}
             }
         }
-
-        // Forward everything else to the active view.
-        if let Some(v) = self.views.get_mut(self.active_view) {
-            v.handle_event(ev, ctx)
-        } else {
-            Ok(EventOutcome::NotHandled)
-        }
+        Ok(EventOutcome::NotHandled)
     }
 
     fn render(&mut self, frame: &mut Frame, area: Rect, ctx: &TabCtx) {

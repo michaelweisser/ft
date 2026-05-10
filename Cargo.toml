@@ -39,6 +39,6 @@ crossterm = "0.28"
 # Dev / test (shared)
 assert_cmd = "2"
 assert_fs = "1"
-insta = "1"
+insta = { version = "1", features = ["filters"] }
 predicates = "3"
 proptest = "1"

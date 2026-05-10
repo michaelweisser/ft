@@ -1,6 +1,8 @@
+use std::cell::Cell;
 use std::time::Duration;
 
 use anyhow::Result;
+use chrono::{DateTime, Local, NaiveDate};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
 use ft_core::vault::Vault;
 use ratatui::Frame;
@@ -17,26 +19,29 @@ use crate::tui::{
 
 pub struct App {
     vault: Vault,
+    today: NaiveDate,
     tabs: Vec<Box<dyn Tab>>,
     active: usize,
     mode: Mode,
-    last_refresh: Option<chrono::DateTime<chrono::Local>>,
+    last_refresh: Cell<Option<DateTime<Local>>>,
     should_quit: bool,
 }
 
 impl App {
     pub fn new(vault: Vault) -> Self {
+        let today = resolve_today();
         let tabs: Vec<Box<dyn Tab>> = vec![Box::new(WelcomeTab::new()), Box::new(TasksTab::new())];
-        Self::with_tabs(vault, tabs)
+        Self::with_tabs(vault, today, tabs)
     }
 
-    fn with_tabs(vault: Vault, tabs: Vec<Box<dyn Tab>>) -> Self {
+    fn with_tabs(vault: Vault, today: NaiveDate, tabs: Vec<Box<dyn Tab>>) -> Self {
         Self {
             vault,
+            today,
             tabs,
             active: 0,
             mode: Mode::Normal,
-            last_refresh: None,
+            last_refresh: Cell::new(None),
             should_quit: false,
         }
     }
@@ -48,7 +53,8 @@ impl App {
         {
             let mut ctx = TabCtx {
                 vault: &self.vault,
-                last_refresh: self.last_refresh,
+                today: self.today,
+                last_refresh: &self.last_refresh,
             };
             self.tabs[self.active].on_focus(&mut ctx)?;
         }
@@ -68,24 +74,29 @@ impl App {
         let titles: Vec<&str> = self.tabs.iter().map(|t| t.title()).collect();
         ui::render_tab_bar(frame, tab_bar, &titles, self.active);
 
-        let ctx = TabCtx {
-            vault: &self.vault,
-            last_refresh: self.last_refresh,
-        };
-        ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
-
+        // Render the status bar before constructing the body's `TabCtx` —
+        // the ctx borrows `&self.last_refresh` for the body to write through,
+        // and the status bar reads the same Cell to display the timestamp.
         let vault_name = self
             .vault
             .path
             .file_name()
             .map(|n| n.to_string_lossy().into_owned())
             .unwrap_or_else(|| self.vault.path.display().to_string());
+
+        let ctx = TabCtx {
+            vault: &self.vault,
+            today: self.today,
+            last_refresh: &self.last_refresh,
+        };
+        ui::render_body(frame, body, self.tabs[self.active].as_mut(), &ctx);
+
         ui::render_status_bar(
             frame,
             status_bar,
             &vault_name,
             self.tabs[self.active].title(),
-            self.last_refresh,
+            self.last_refresh.get(),
             self.mode,
         );
 
@@ -112,7 +123,8 @@ impl App {
         let outcome = {
             let mut ctx = TabCtx {
                 vault: &self.vault,
-                last_refresh: self.last_refresh,
+                today: self.today,
+                last_refresh: &self.last_refresh,
             };
             self.tabs[self.active].handle_event(ev.clone(), &mut ctx)?
         };
@@ -172,13 +184,23 @@ impl App {
         }
         let mut ctx = TabCtx {
             vault: &self.vault,
-            last_refresh: self.last_refresh,
+            today: self.today,
+            last_refresh: &self.last_refresh,
         };
         self.tabs[self.active].on_blur(&mut ctx)?;
         self.active = idx;
         self.tabs[self.active].on_focus(&mut ctx)?;
         Ok(())
     }
+}
+
+/// Resolve "today" for the current run. Honors `FT_TODAY=YYYY-MM-DD` to keep
+/// the TUI deterministic in tests and reproducible with the CLI.
+fn resolve_today() -> NaiveDate {
+    std::env::var("FT_TODAY")
+        .ok()
+        .and_then(|s| NaiveDate::parse_from_str(&s, "%Y-%m-%d").ok())
+        .unwrap_or_else(|| Local::now().date_naive())
 }
 
 // --- test-only helpers ---------------------------------------------------
@@ -191,14 +213,15 @@ impl App {
         Self::new(vault)
     }
 
-    /// Like [`for_test`], but injects a fixed clock into the Tasks tab so
-    /// snapshots that include the live clock are deterministic.
+    /// Like [`for_test`], but injects a fixed clock and derives `today` from
+    /// it so snapshots are deterministic without relying on `FT_TODAY`.
     pub fn for_test_with_clock(vault: Vault, clock: ClockFn) -> Self {
+        let today = clock().date_naive();
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::with_clock(clock)),
         ];
-        Self::with_tabs(vault, tabs)
+        Self::with_tabs(vault, today, tabs)
     }
 
     pub fn render_to(&mut self, frame: &mut Frame) {

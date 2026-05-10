@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
+│                      ││not done and due before 2026-05-18 sort by due, priori│
+│ Sun 10 May           │└──────────────────────────────────────────────────────┘
+│ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
+│                      ││ ── overdue (2) ──                                    │
+│ ── views ──          ││▶ !!  Pay rent               📅  2026-05-08            │
+│ ▶ Search             ││  !   Renew passport         📅  2026-05-09            │
+│                      ││ ── upcoming (3) ──                                   │
+│                      ││      Reply to Sara          📅  2026-05-10            │
+│                      ││  !!  Submit Q2 report       📅  2026-05-12 ⏳  2026-05-│
+│                      ││  v   Buy birthday gift      📅  2026-05-15            │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

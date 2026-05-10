@@ -3,17 +3,17 @@ source: ft/src/tui/tests.rs
 expression: frame
 ---
   1 Welcome  │  2 Tasks                                                         
-┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
-│                      ││query: (default — session 3 wires this up)            │
+┌ sidebar ─────────────┐┌ query (editing) ─────────────────────────────────────┐
+│                      ││d due before 2026-05-18 sort by due, priority reverse││
 │ Sun 10 May           │└──────────────────────────────────────────────────────┘
 │ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
-│                      ││                                                      │
-│ ── views ──          ││                      Search view                     │
-│ ▶ Search             ││                                                      │
-│                      ││           (no tasks loaded yet — session 3)          │
-│                      ││                                                      │
-│                      ││                                                      │
-│                      ││                                                      │
+│                      ││ ── overdue (2) ──                                    │
+│ ── views ──          ││▶ !!  Pay rent               📅  2026-05-08            │
+│ ▶ Search             ││  !   Renew passport         📅  2026-05-09            │
+│                      ││ ── upcoming (3) ──                                   │
+│                      ││      Reply to Sara          📅  2026-05-10            │
+│                      ││  !!  Submit Q2 report       📅  2026-05-12 ⏳  2026-05-│
+│                      ││  v   Buy birthday gift      📅  2026-05-15            │
 │                      ││                                                      │
 │                      ││                                                      │
 │                      ││                                                      │
@@ -25,4 +25,4 @@ expression: frame
 │                      ││                                                      │
 │                      ││                                                      │
 └──────────────────────┘└──────────────────────────────────────────────────────┘
- vault: test-vault  ·  tab: Tasks           not yet refreshed      mode: normal
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

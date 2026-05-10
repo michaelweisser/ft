@@ -1,5 +1,7 @@
+use std::cell::Cell;
+
 use anyhow::Result;
-use chrono::{DateTime, Local};
+use chrono::{DateTime, Local, NaiveDate};
 use ft_core::vault::Vault;
 use ratatui::{layout::Rect, Frame};
 
@@ -17,12 +19,21 @@ pub enum EventOutcome {
     Quit,
 }
 
-/// Shared context passed to tabs on every event/render. v1 carries only the
-/// vault and a refresh timestamp; sessions 2+ will extend this.
+/// Shared context passed to tabs on every event/render.
+///
+/// `today` is the date used to resolve DSL keywords (`today` / `tomorrow`)
+/// and to bucket overdue vs upcoming tasks; it is fixed for the lifetime of
+/// the App so a long-running session has stable bucketing. The clock for
+/// the live sidebar display is separate (see `tabs::tasks::ClockFn`).
+///
+/// `last_refresh` is wrapped in a `Cell` so views can update it through
+/// the shared `&TabCtx` they receive in `render` and `handle_event` —
+/// the App reads it back when drawing the status bar.
 #[allow(dead_code)]
 pub struct TabCtx<'a> {
     pub vault: &'a Vault,
-    pub last_refresh: Option<DateTime<Local>>,
+    pub today: NaiveDate,
+    pub last_refresh: &'a Cell<Option<DateTime<Local>>>,
 }
 
 /// A top-level tab in the TUI. New tabs slot in by adding a `Box<dyn Tab>` to

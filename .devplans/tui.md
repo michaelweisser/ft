@@ -62,16 +62,16 @@ date and priority — exactly what matters at the start of a work session.
 - [x] Left sidebar contains: current date and time (updated every second), and a view dropdown
 - [x] View dropdown lists available views; first and only v1 view is "Search"; navigate with `↑`/`↓`, select with `Enter`
 - [x] Right viewport renders the active view
-- [ ] Loads task data on first focus (lazy); shows a loading indicator while scanning
+- [x] Loads task data on first focus (lazy); shows a loading indicator while scanning
 
 ### Tasks tab — Search view
-- [ ] Viewport is split vertically: query bar on top (1–2 lines), task list filling the rest
-- [ ] Query bar shows the active query DSL expression and is editable (press `/` or `q` to focus it, `Enter` to apply, `Esc` to cancel edit and revert)
-- [ ] Default query on launch: tasks that are overdue or due within the next 7 days, sorted by due date ascending then priority descending
-- [ ] Task list has a visual divider between the overdue section and the upcoming section (e.g. a labelled separator row: `── overdue ──` above, `── upcoming ──` below); if one section is empty the divider for that section is omitted
-- [ ] Each task row displays: priority indicator, description, due date, scheduled date — all in a compact single line; use color or symbols to distinguish priority levels and flag overdue dates
-- [ ] Move selection up/down with `↑`/`↓` or `j`/`k`; selection wraps at list boundaries
-- [ ] `R` reloads all task data from disk and re-applies the current query
+- [x] Viewport is split vertically: query bar on top (1–2 lines), task list filling the rest
+- [x] Query bar shows the active query DSL expression and is editable (press `/` to focus it, `Enter` to apply, `Esc` to cancel edit and revert) [`q` dropped — collides with the global quit keybinding]
+- [x] Default query on launch: tasks that are overdue or due within the next 7 days, sorted by due date ascending then priority descending
+- [x] Task list has a visual divider between the overdue section and the upcoming section (e.g. a labelled separator row: `── overdue ──` above, `── upcoming ──` below); if one section is empty the divider for that section is omitted
+- [x] Each task row displays: priority indicator, description, due date, scheduled date — all in a compact single line; use color or symbols to distinguish priority levels and flag overdue dates
+- [x] Move selection up/down with `↑`/`↓` or `j`/`k`; selection wraps at list boundaries
+- [x] `R` reloads all task data from disk and re-applies the current query
 
 ### Tasks tab — quick keybindings (selected task)
 - [ ] `]` moves the due date forward one day; `[` moves it back one day
@@ -190,9 +190,46 @@ Tasks tab without panic. 10 tui tests pass; full workspace `cargo test`
 (345 tests), `cargo clippy --workspace --all-targets`, and
 `cargo fmt --check` all clean.
 
-### Session 3 · 2026-05-10 · planned
+### Session 3 · 2026-05-10 · done
 **Goal:** Search view: lazy task load, default overdue+upcoming query, row rendering with priority/due/scheduled, overdue/upcoming divider, navigation, editable query bar, R to reload
-**Outcome:** 
+**Outcome:** Replaced the SearchView stub with a full implementation. State:
+loaded `Vec<Task>`, sorted+filtered `matches: Vec<usize>`, `overdue_count`,
+selection cursor, scroll offset, `query_text` plus a `parse_state` cache, and
+an optional `EditBuffer` with character-level cursor + horizontal scroll for
+the bar. On first focus the view scans the vault and bumps `last_refresh`;
+`R` (Shift+r) re-scans. Default query is `not done and due before <today+8d>
+sort by due, priority reverse` (literal date so the bar is round-trippable
+through the existing DSL parser). Rows render single-line with priority
+label (`!!!`/`!!`/`!`/`v`/`vv`), description (truncated to 22 cols at 80x24),
+due date, scheduled date — overdue dates in red, scheduled in cyan, selected
+row gets a `▶` cursor and a darker bg. Section dividers (`── overdue (N) ──`,
+`── upcoming (N) ──`) appear only when their section has entries. Navigation:
+`↑`/`↓`/`j`/`k` wrap the selection; `/` opens the editor; `Enter` applies and
+re-runs filter+sort; `Esc` cancels with no write. Long queries scroll
+horizontally so the cursor stays visible. Parse errors short-circuit the
+list area with a visible error message. To unblock this:
+
+1. Refactored `TabCtx` — added `today: NaiveDate` (resolved from `FT_TODAY`
+   or `Local::now`) and switched `last_refresh` to `&Cell<Option<DateTime>>`
+   so views can write through `&TabCtx` and the App reads back when drawing
+   the status bar. The `now` for the timestamp is `Local::now()` at write
+   time; tests redact it via an `insta::with_settings!{filters}` helper.
+2. Reversed Tasks-tab key precedence: the active view gets first dibs on
+   `↑`/`↓`/`Enter`; the sidebar dropdown only handles them if the view
+   returns `NotHandled` (so the Search list owns its own selection without
+   colliding with the dropdown).
+3. Resolved a contradiction in the plan (`q` listed as both quit and
+   edit-mode trigger) — kept `q` as the global quit key and dropped the
+   `q`-to-edit binding; `/` alone (vi/less convention) opens the bar.
+4. Added the `filters` feature to the `insta` workspace dep so snapshots
+   can redact the wall-clock timestamp.
+
+7 new tests (5 new behavioural + 2 new snapshots): empty-vault, populated
+vault with overdue/upcoming divider, edit-mode rendering, parse-error
+rendering, arrow-key wrap, query-apply filter, Esc cancels edit, `R` picks
+up disk changes. 17 tui tests pass; full workspace `cargo test` (350+
+tests), `cargo clippy --workspace --all-targets`, and `cargo fmt --check`
+all clean.
 
 ### Session 4 · 2026-05-10 · planned
 **Goal:** Quick keybindings: []{}p P x X for date nudges, priority cycle, complete (with recurrence), cancel; atomic writes and in-place row updates
