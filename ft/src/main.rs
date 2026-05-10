@@ -13,7 +13,7 @@ mod output;
     version,
     about = "Command-line interface to your Obsidian vault"
 )]
-struct Cli {
+pub(crate) struct Cli {
     /// Obsidian vault root (overrides $FT_VAULT and auto-discovery)
     #[arg(long, global = true, value_name = "DIR")]
     vault: Option<std::path::PathBuf>,
@@ -21,6 +21,11 @@ struct Cli {
     /// Increase verbosity: -v = info, -vv = debug, -vvv = trace
     #[arg(short, action = clap::ArgAction::Count, global = true)]
     verbose: u8,
+
+    /// Emit errors as a JSON object on stderr (`{"error": ..., "chain": [...]}`)
+    /// instead of human-readable text. Useful for scripting.
+    #[arg(long, global = true)]
+    json_errors: bool,
 
     #[command(subcommand)]
     command: Commands,
@@ -33,9 +38,13 @@ enum Commands {
     Vault(cmd::vault::VaultArgs),
     /// Task operations: list, create, complete, move
     Tasks(cmd::tasks::TasksArgs),
+    /// Generate shell completion script
+    Completions(cmd::completions::CompletionsArgs),
+    /// Render man pages from the clap definition
+    Man(cmd::man::ManArgs),
 }
 
-fn main() -> Result<ExitCode> {
+fn main() -> ExitCode {
     let cli = Cli::parse();
 
     let level = match cli.verbose {
@@ -51,11 +60,34 @@ fn main() -> Result<ExitCode> {
         .with_writer(std::io::stderr)
         .init();
 
-    match cli.command {
-        Commands::Vault(args) => {
-            cmd::vault::run(args, cli.vault)?;
-            Ok(ExitCode::SUCCESS)
+    let json_errors = cli.json_errors;
+    let vault = cli.vault;
+
+    let result: Result<ExitCode> = match cli.command {
+        Commands::Vault(args) => cmd::vault::run(args, vault).map(|_| ExitCode::SUCCESS),
+        Commands::Tasks(args) => cmd::tasks::run(args, vault),
+        Commands::Completions(args) => cmd::completions::run(args).map(|_| ExitCode::SUCCESS),
+        Commands::Man(args) => cmd::man::run(args).map(|_| ExitCode::SUCCESS),
+    };
+
+    match result {
+        Ok(code) => code,
+        Err(e) => {
+            if json_errors {
+                print_json_error(&e);
+            } else {
+                eprintln!("Error: {e:#}");
+            }
+            ExitCode::FAILURE
         }
-        Commands::Tasks(args) => cmd::tasks::run(args, cli.vault),
     }
+}
+
+fn print_json_error(e: &anyhow::Error) {
+    let chain: Vec<String> = e.chain().map(|c| c.to_string()).collect();
+    let body = serde_json::json!({
+        "error": e.to_string(),
+        "chain": chain,
+    });
+    eprintln!("{body}");
 }

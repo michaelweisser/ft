@@ -24,6 +24,8 @@ tempfile = "3"
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }
+clap_complete = "4"
+clap_mangen = "0.2"
 anyhow = "1"
 tracing-subscriber = { version = "0.3", features = ["env-filter"] }
 comfy-table = "7"

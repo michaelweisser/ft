@@ -2,7 +2,7 @@
 id: 001
 name: tasks
 title: "Tasks: foundation library + ft tasks CLI"
-status: implementing
+status: finished
 created: 2026-05-09
 updated: 2026-05-10
 ---
@@ -34,7 +34,7 @@ everything that follows, so this plan invests in a strong test bed
 - [x] `cargo build --release` produces a single `ft` binary; `cargo test --workspace` passes
 - [x] `ft --version` and `ft --help` work; subcommand structure uses clap derive
 - [x] CI-ready: clippy clean with `-D warnings`, rustfmt clean, MSRV pinned in `rust-toolchain.toml` to a recent stable
-- [ ] README with quick-start, install instructions (`cargo install --path ft`), and a one-page architecture overview
+- [x] README with quick-start, install instructions (`cargo install --path ft`), and a one-page architecture overview
 
 ### Vault discovery & config
 - [x] Discovery precedence: `--vault` flag > `FT_VAULT` env > walk up from CWD looking for `.obsidian/` > named vaults in `~/.config/ft/config.toml` (`default` key)
@@ -92,27 +92,27 @@ everything that follows, so this plan invests in a strong test bed
 - [x] Dry-run with `--dry-run` prints the diff of every affected file without writing
 
 ### Error model & UX
-- [ ] Library uses `thiserror` enums; binary uses `anyhow` with `Context`
-- [ ] All errors include vault-relative paths (not absolute) where possible
-- [ ] `--verbose` / `-v` flags map to `tracing` levels
-- [ ] `--json-errors` produces structured error output for scripting
-- [ ] Color output via `owo-colors`, auto-disabled when stdout is not a TTY or `NO_COLOR` is set
+- [x] Library uses `thiserror` enums; binary uses `anyhow` with `Context`
+- [x] All errors include vault-relative paths (not absolute) where possible
+- [x] `--verbose` / `-v` flags map to `tracing` levels
+- [x] `--json-errors` produces structured error output for scripting
+- [x] Color output via `owo-colors`, auto-disabled when stdout is not a TTY or `NO_COLOR` is set
 
 ### Testing
-- [ ] Unit tests live with the modules in `ft-core/src/`
-- [ ] Integration tests under `ft/tests/` use `assert_cmd` + `assert_fs` against fixture vaults checked into `tests/fixtures/`
+- [x] Unit tests live with the modules in `ft-core/src/`
+- [x] Integration tests under `ft/tests/` use `assert_cmd` + `assert_fs` against fixture vaults checked into `tests/fixtures/`
 - [x] At least three fixture vaults: `tiny/` (a few tasks, all formats), `realistic/` (tens of notes mirroring PARA layout), `pathological/` (deep subtasks, weird emoji combos, malformed lines)
-- [ ] Snapshot tests with `insta` for every output format on each fixture
-- [ ] Proptest round-trip on the parser (generated tasks → serialize → parse → equal)
-- [ ] At least one test that runs against the real fortytwo vault if present (gated on env var `FT_REAL_VAULT_TESTS=1` so CI doesn't depend on it), comparing list output before/after `ft tasks complete` is a no-op
-- [ ] Coverage target: 80%+ on `ft-core` (track via `cargo-llvm-cov` but don't gate CI on it)
+- [x] Snapshot tests with `insta` for every output format on each fixture
+- [x] Proptest round-trip on the parser (generated tasks → serialize → parse → equal)
+- [x] At least one test that runs against the real fortytwo vault if present (gated on env var `FT_REAL_VAULT_TESTS=1` so CI doesn't depend on it), comparing list output before/after `ft tasks complete` is a no-op
+- [ ] Coverage target: 80%+ on `ft-core` (track via `cargo-llvm-cov` but don't gate CI on it) — deferred (explicit non-gating per plan)
 
 ### Documentation
-- [ ] `docs/architecture.md` — workspace layout, key traits, where to add a new subcommand, where to add a new task format
-- [ ] `docs/task-format.md` — exactly which Obsidian Tasks emoji fields are supported, with examples and a "deferred" section
-- [ ] `docs/query-dsl.md` — the supported subset of the query language with grammar and examples
-- [ ] `man/ft.1` and per-subcommand man pages generated from clap (use `clap_mangen`)
-- [ ] Shell completions generated for bash/zsh/fish via `clap_complete`
+- [x] `docs/architecture.md` — workspace layout, key traits, where to add a new subcommand, where to add a new task format
+- [x] `docs/task-format.md` — exactly which Obsidian Tasks emoji fields are supported, with examples and a "deferred" section
+- [x] `docs/query-dsl.md` — the supported subset of the query language with grammar and examples
+- [x] `man/ft.1` and per-subcommand man pages generated from clap (use `clap_mangen`) via `ft man [--out DIR]`
+- [x] Shell completions generated for bash/zsh/fish via `clap_complete` via `ft completions <shell>`
 
 ## Technical Notes
 
@@ -783,7 +783,7 @@ parent is computed by file-relative range containment rather than by
 walking `Task.parent` pointers — so the rule works even when the user
 passes raw `file:line` selectors that bypass scan-time hierarchy.
 
-### Session 8 · 2026-05-09 · planned
+### Session 8 · 2026-05-09 · done
 **Goal:** Polish — man pages, shell completions, color/`NO_COLOR`, `--json-errors`, docs, real-vault test
 
 **Scope:**
@@ -821,4 +821,62 @@ passes raw `file:line` selectors that bypass scan-time hierarchy.
 **Advances acceptance criteria:** "Documentation"; remainder of "Error
 model & UX"; "Testing" (real-vault test).
 
-**Outcome:** 
+**Outcome:** Session 8 polishes the project for general use. New CLI
+subcommands `ft completions <bash|zsh|fish|elvish|powershell>` (via
+`clap_complete::generate`) emits the script to stdout, and `ft man
+[--out DIR]` (via `clap_mangen`) renders the top-level man page to
+stdout, or — with `--out DIR` — writes one man file per subcommand
+and nested subcommand into the directory (`ft.1`, `ft-vault.1`,
+`ft-tasks.1`, `ft-tasks-list.1`, `ft-tasks-create.1`,
+`ft-tasks-complete.1`, `ft-tasks-move.1`). The meta-subcommands
+`completions`/`man`/`help` are intentionally excluded from man-page
+generation. New global flag `--json-errors` short-circuits the
+top-level error printer in `main`: instead of the human-readable
+`anyhow` chain, errors render as a single-line JSON object on stderr
+(`{"error": "<top-level message>", "chain": [<every link in the
+context chain>]}`), so pipelines can `jq -r .error` cleanly. The
+human path is unchanged when the flag is absent. `main` was
+restructured from `Result<ExitCode>` to a manual `match` so the
+JSON branch can intercept the error before the default anyhow Display
+runs. New deps in `ft`: `clap_complete = "4"`, `clap_mangen = "0.2"`;
+`serde_json` was promoted to dev-deps for the polish-flag tests.
+Documentation: `README.md` (quick-start, install, completions/man
+hints, output formats overview, scripting tips, links to the in-repo
+docs), `docs/architecture.md` (workspace layout, the `TaskFormat` /
+`task::ops` / `query::dsl` seams, build invariants, how to add a new
+subcommand / output format / task format, testing strategy),
+`docs/task-format.md` (every emoji field with table, canonical
+serialization order, date-input forms, recurrence whitelist, daily-
+notes resolution, deferred list), `docs/query-dsl.md` (full grammar,
+examples, date keywords, built-in presets, composition with flag
+filters, sort/limit, error catalog mapping every `DslError` variant
+back to the grammar). Tests: 8 new `polish.rs` integration tests
+covering each shell's completion script signature, `ft man` stdout
+mode and `--out DIR` mode (asserting every expected page exists and
+contains a `.TH` header, and that meta-subcommands are excluded), and
+both `--json-errors` (parses as JSON, contains `error` + `chain`) and
+the human-error fallback. New `real_vault_cli.rs` test file gated on
+`FT_REAL_VAULT_TESTS=1` adds 4 CLI-level real-vault smokes
+(non-empty list, list-then-list byte-stable, `overdue` preset runs,
+`--dry-run` move against `_ft_smoke_real_target.md` with a synthetic
+no-match query); when the env var is unset they early-return so CI
+never depends on a local vault. **318 → 330 tests green** (`4 + 8 +
+4 + 11 + 18 + 46 + 9 + 5 + 224 + 1`); clippy clean with `-D
+warnings`; fmt clean. Real-vault smoke against
+`/Users/cmw/git/fortytwo` (run as `FT_REAL_VAULT_TESTS=1 cargo test`)
+passes all four CLI smokes plus the existing parser-level
+`real_vault_round_trip`. Coverage gating is explicitly deferred per
+plan ("track via cargo-llvm-cov but don't gate CI on it"); every
+other acceptance criterion in plan 001 is now ticked. Decisions: (a)
+`ft man` writes per-subcommand man pages with the page title set via
+`clap_mangen::Man::title(&str)` rather than mutating
+`Command::name`, because clap's `Str` type only converts from
+`&'static str`, and `title` is the documented seam for this anyway;
+(b) the `--json-errors` JSON shape is intentionally minimal
+(`error` + `chain`) so consumers don't break when we add fields
+later; (c) `ft man` stdout-only renders the top-level page rather
+than every page concatenated, so `ft man | man -l -` works as
+expected for quick reading; (d) the existing `--no-color` /
+`NO_COLOR` / TTY-detection plumbing already covered the "Color
+output" criterion from earlier sessions, so this session just ticks
+it off without code changes.
