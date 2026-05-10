@@ -7,6 +7,29 @@ pub struct TableOpts {
 }
 
 pub fn render(tasks: &[&Task], opts: TableOpts) -> String {
+    render_one(tasks, opts)
+}
+
+/// Render multiple labelled groups, separated by section headings.
+pub fn render_grouped(groups: &[(String, Vec<&Task>)], opts: TableOpts) -> String {
+    let mut out = String::new();
+    for (i, (label, tasks)) in groups.iter().enumerate() {
+        if i > 0 {
+            out.push('\n');
+        }
+        out.push_str(&format!("## {label} ({})\n", tasks.len()));
+        out.push_str(&render_one(
+            tasks,
+            TableOpts {
+                use_color: opts.use_color,
+            },
+        ));
+        out.push('\n');
+    }
+    out
+}
+
+fn render_one(tasks: &[&Task], opts: TableOpts) -> String {
     let mut table = Table::new();
     table
         .load_preset(UTF8_FULL)

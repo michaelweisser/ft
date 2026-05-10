@@ -60,13 +60,13 @@ everything that follows, so this plan invests in a strong test bed
 
 ### `ft tasks list`
 - [x] Flag-based filters: `--status`, `--priority`, `--tag`, `--path`, `--due-before`, `--due-after`, `--scheduled-before`, `--scheduled-after`, `--has-due`, `--no-due`
-- [ ] `--query "<DSL>"` accepts a subset of the Obsidian Tasks query language: status / priority / path / tag predicates, date comparisons, `and`/`or`/`not`, `sort by <field>`, `limit N`. Document the supported subset; reject the rest with a clear error pointing to the docs section
-- [ ] Flags compose with `--query` (flags appended as additional `and` clauses)
-- [ ] `--sort` flag with multiple keys; default sort: due date asc, then priority desc, then path
-- [ ] Output formats: `--format table` (default, with terminal width awareness via `comfy-table`), `--format json`, `--format ndjson`, `--format markdown` (emits the source lines so output can be piped back as a task list)
-- [ ] Presets: `ft tasks list <preset-name>` looks up the preset in config; ships with built-ins `today`, `overdue`, `upcoming`, `done-today` that users can override
-- [ ] `--group-by path|folder|due|priority|tag` for the table format
-- [ ] Exit code 1 if no tasks match (configurable via `--allow-empty`) — useful in scripting
+- [x] `--query "<DSL>"` accepts a subset of the Obsidian Tasks query language: status / priority / path / tag predicates, date comparisons, `and`/`or`/`not`, `sort by <field>`, `limit N`. Document the supported subset; reject the rest with a clear error pointing to the docs section
+- [x] Flags compose with `--query` (flags appended as additional `and` clauses)
+- [x] `--sort` flag with multiple keys; default sort: due date asc, then priority desc, then path
+- [x] Output formats: `--format table` (default, with terminal width awareness via `comfy-table`), `--format json`, `--format ndjson`, `--format markdown` (emits the source lines so output can be piped back as a task list)
+- [x] Presets: `ft tasks list <preset-name>` looks up the preset in config; ships with built-ins `today`, `overdue`, `upcoming`, `done-today` that users can override
+- [x] `--group-by path|folder|due|priority|tag` for the table format
+- [x] Exit code 1 if no tasks match (configurable via `--allow-empty`) — useful in scripting
 
 ### `ft tasks create`
 - [ ] Positional arg is the description; flags add metadata: `--due`, `--scheduled`, `--start`, `--priority`, `--tag` (repeatable), `--recurrence`, `--id`, `--depends-on`
@@ -101,7 +101,7 @@ everything that follows, so this plan invests in a strong test bed
 ### Testing
 - [ ] Unit tests live with the modules in `ft-core/src/`
 - [ ] Integration tests under `ft/tests/` use `assert_cmd` + `assert_fs` against fixture vaults checked into `tests/fixtures/`
-- [ ] At least three fixture vaults: `tiny/` (a few tasks, all formats), `realistic/` (tens of notes mirroring PARA layout), `pathological/` (deep subtasks, weird emoji combos, malformed lines)
+- [x] At least three fixture vaults: `tiny/` (a few tasks, all formats), `realistic/` (tens of notes mirroring PARA layout), `pathological/` (deep subtasks, weird emoji combos, malformed lines)
 - [ ] Snapshot tests with `insta` for every output format on each fixture
 - [ ] Proptest round-trip on the parser (generated tasks → serialize → parse → equal)
 - [ ] At least one test that runs against the real fortytwo vault if present (gated on env var `FT_REAL_VAULT_TESTS=1` so CI doesn't depend on it), comparing list output before/after `ft tasks complete` is a no-op
@@ -381,7 +381,7 @@ wall time on `/Users/cmw/git/fortytwo`. `Status` enum gained `Copy`. Decision: t
 appear before field emojis in source lines to be indexed (parser stops at first field
 boundary); fixture authored accordingly, matching plugin convention.
 
-### Session 4 · 2026-05-09 · planned
+### Session 4 · 2026-05-09 · done
 **Goal:** Query DSL subset + sort/group + presets + markdown/ndjson output
 
 **Scope:**
@@ -426,7 +426,49 @@ fixture (Testing); query DSL doc placeholder created (real doc in session 8).
 **Deferred:** docs prose (session 8), shell completions for preset names
 (session 8).
 
-**Outcome:** 
+**Outcome:** Session 4 ships the full DSL + presets + formats stack.
+`ft-core::query::dsl` adds a hand-rolled tokenizer + recursive-descent parser
+producing a `Query { expr, sort_keys, limit }`; the AST lives in
+`query::expr` (`Expr` / `Atom`) and evaluates against `Task` directly.
+Predicates supported: `status is X`, `priority is X`, `path includes X`,
+`tag is X` / `has tag X`, `due/scheduled/completed (before|after|on) <date>`,
+`done`, `not done`, `has due [date]`, `no due date`. Combinators: `and`, `or`,
+`not`, parentheses, with `and` binding tighter than `or`. Tail clauses:
+`sort by <key> [reverse], …` and `limit N`. Date keywords `today`,
+`tomorrow`, `yesterday` resolve against an injected `today: NaiveDate`, and
+the CLI honours an `FT_TODAY=YYYY-MM-DD` env var for deterministic tests and
+reproducible scripts. Unsupported plugin features (`group by`, `hide`, etc.)
+and unknown identifiers reject with structured `DslError` variants pointing at
+`docs/query-dsl.md`. `query::preset::builtin` ships `today`, `overdue`,
+`upcoming`, `done-today` as DSL strings (so user definitions in
+`Config.presets` shadow them through the same parser); positional CLI arg is
+preset-then-DSL fallback. `--query` and the positional arg compose with flag
+filters as additional `and` clauses. `--sort` accepts repeated or
+comma-separated keys with a `:reverse` suffix and overrides any DSL
+`sort by`. `--group-by path|folder|due|priority|tag` renders one labelled
+sub-table per bucket via the new `output::table::render_grouped`. New output
+formats `markdown` (round-trippable source lines via `EmojiFormat::serialize_line`)
+and `ndjson` (one Task JSON object per line) live in `ft/src/output/`.
+`--allow-empty` flips the default exit code, which is now `1` when nothing
+matches so the binary plays nicely in pipelines. `Config.presets:
+HashMap<String, String>` was added with a unit test for round-trip loading.
+Pathological fixture committed at `tests/fixtures/pathological/` covering deep
+subtasks (5 levels), every emoji field, weird unicode, `[brackets]`, wikilinks,
+trailing whitespace, and malformed lines (`[ task` / `[?]` / `[]missing-space`)
+— scanner does not crash and surfaces a `tracing` warning for unknown markers
+as designed. Real-vault smoke (`/Users/cmw/git/fortytwo`) confirms presets and
+DSL queries return sensible markdown lines. Tests: 38 query-module unit tests,
+46 `tasks_list` integration tests (DSL predicates, combinators, presets, user
+preset shadowing via temp vault, sort overrides, grouped table sections,
+markdown/ndjson formats, `--allow-empty` vs default exit-1, pathological scan,
+deep-subtask parent resolution), 4 cli unit tests on `parse_cli_sort_keys`,
+plus prior tests = **172 total green**, clippy clean with `-D warnings`,
+fmt clean. Decisions: (a) `not done` parses to a primitive `Atom::NotDone`
+rather than `Not(Done)` for cleaner snapshots and to match plugin convention;
+(b) DSL `sort` only fires when the CLI does not pass `--sort`, so the CLI is
+the more local override; (c) preset resolution prefers user config over
+built-ins by name match, with built-ins still living in code so they always
+have a known-parseable definition.
 
 ### Session 5 · 2026-05-09 · planned
 **Goal:** `ft tasks create` + atomic writes + daily-notes resolution + date parsing + editor handoff

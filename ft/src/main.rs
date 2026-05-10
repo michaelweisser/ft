@@ -1,3 +1,5 @@
+use std::process::ExitCode;
+
 use anyhow::Result;
 use clap::{Parser, Subcommand};
 use tracing_subscriber::EnvFilter;
@@ -32,7 +34,7 @@ enum Commands {
     Tasks(cmd::tasks::TasksArgs),
 }
 
-fn main() -> Result<()> {
+fn main() -> Result<ExitCode> {
     let cli = Cli::parse();
 
     let level = match cli.verbose {
@@ -49,9 +51,10 @@ fn main() -> Result<()> {
         .init();
 
     match cli.command {
-        Commands::Vault(args) => cmd::vault::run(args, cli.vault)?,
-        Commands::Tasks(args) => cmd::tasks::run(args, cli.vault)?,
+        Commands::Vault(args) => {
+            cmd::vault::run(args, cli.vault)?;
+            Ok(ExitCode::SUCCESS)
+        }
+        Commands::Tasks(args) => cmd::tasks::run(args, cli.vault),
     }
-
-    Ok(())
 }
