@@ -2,7 +2,7 @@
 id: 003
 name: notes
 title: Notes tab — open & section-move
-status: ready
+status: implementing
 created: 2026-05-09
 updated: 2026-05-11
 ---
@@ -300,7 +300,7 @@ sequential pair-write.
 
 ## Sessions
 
-### Session 1 · planned
+### Session 1 · 2026-05-11 · planned
 **Goal:** Library primitives. `ft_core::notes` module with `Section`,
 `extract_sections`, `shift_section_level`, `validate_disjoint`,
 `move_sections`, and `write_pair`. Full unit-test coverage for each
@@ -331,3 +331,4 @@ picker, compose view with `Shift+↑/↓` reorder + `←/→` level-shift.
 Commit calls `move_sections` + `write_pair` and emits a success toast.
 Snapshot tests for each step plus a full end-to-end key-driven test.
 **Outcome:**
+
