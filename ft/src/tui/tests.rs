@@ -1729,6 +1729,82 @@ fn new_popup_snapshot_80x24() -> Result<()> {
 }
 
 #[test]
+fn quickline_empty_snapshot_80x24() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("quickline_empty_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn quickline_valid_preview_snapshot_80x24() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "buy milk due:tomorrow pri:high #grocery".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("quickline_valid_preview_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn quickline_parse_error_snapshot_80x24() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "draft due:not-a-date".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("quickline_parse_error_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn new_popup_prefilled_snapshot_80x24() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "review report due:tomorrow pri:high #work".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('e'),
+        KeyModifiers::CONTROL,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("new_popup_prefilled_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn quickline_toast_success_snapshot_80x24() -> Result<()> {
+    let (_dir, vault) = quickline_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(1)?;
+    app.dispatch(key('c'))?;
+    for c in "ship feature due:tomorrow".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    app.service_pending_for_test()?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("quickline_toast_success_80x24", frame);
+    Ok(())
+}
+
+#[test]
 fn quickline_ctrl_w_works_in_input() -> Result<()> {
     let (_dir, vault) = quickline_vault();
     let mut app = App::for_test_with_clock(vault, fixed_clock);
@@ -1897,10 +1973,7 @@ fn target_picker_navigation_changes_selection() -> Result<()> {
         app.dispatch(key(c))?;
     }
     let initial = render(&mut app, 100, 30);
-    app.dispatch(Event::Key(KeyEvent::new(
-        KeyCode::Down,
-        KeyModifiers::NONE,
-    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
     let after_down = render(&mut app, 100, 30);
     assert!(
         initial != after_down,

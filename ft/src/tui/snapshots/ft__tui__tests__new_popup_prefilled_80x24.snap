@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
+│                      ││not done and due before 2026-05-18 sort by due, priori│
+│ Sun 10 May           │└──────────────────────────────────────────────────────┘
+│ 14:32:05             │┌ tasks ───────────────────────────────────────────────┐
+│                      ││       ┌ new task ────────────────────────────┐       │
+│ ── views ──          ││       │                                      │       │
+│ ▶ Search             ││       │  description : review report #work│  │       │
+│                      ││       │       target :                       │       │
+│                      ││       │          due : 2026-05-11            │       │
+│                      ││       │    scheduled :                       │       │
+│                      ││       │     priority : high                  │       │
+│                      ││       │         tags : work                  │       │
+│                      ││       │   recurrence :                       │       │
+│                      ││       │                                      │       │
+│                      ││       │  Tab/Shift+Tab next · Ctrl+S save · E│       │
+│                      ││       │                                      │       │
+│                      ││       │                                      │       │
+│                      ││       └──────────────────────────────────────┘       │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal

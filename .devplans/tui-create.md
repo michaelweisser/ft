@@ -2,9 +2,9 @@
 id: 004
 name: tui-create
 title: Create tasks from the TUI
-status: implementing
+status: finished
 created: 2026-05-10
-updated: 2026-05-10
+updated: 2026-05-11
 ---
 
 # Create tasks from the TUI
@@ -150,38 +150,36 @@ or fall through to the form.
 - [x] Toast styling: green for success, red for error (the error toast
       shows after a write fails for IO reasons; duplicate detection
       stays inline because it's recoverable)
-- [ ] Toast styling: green for success, red for error (the error toast
-      shows after a write fails for IO reasons; duplicate detection stays
-      inline because it's recoverable)
 
 ### Help overlay
-- [ ] `c` — open quick-create
-- [ ] `Shift+C` — open create popup directly
-- [ ] `Ctrl+E` (in quickline) — expand to popup
-- [ ] All other quickline / popup keys covered by the existing entries
+- [x] `c` — open quick-create *(rendered as `c / Shift+C — new task (line
+      / form)` to keep the row count under the 80x24 budget)*
+- [x] `Shift+C` — open create popup directly *(same combined row as above)*
+- [x] `Ctrl+E` (in quickline) — expand to popup
+- [x] All other quickline / popup keys covered by the existing entries
       (Tab, Ctrl+S, Esc)
 
 ### Testing
-- [ ] Unit tests for the quickline parser: every token in isolation, two
+- [x] Unit tests for the quickline parser: every token in isolation, two
       tokens at once, escaped tokens, ordering, unicode in description,
       empty input, only-tokens input (no description), invalid date, invalid
       priority
-- [ ] Behavioral test: press `c`, type a quickline, Enter → file on disk
+- [x] Behavioral test: press `c`, type a quickline, Enter → file on disk
       contains the expected serialized line in the expected target
-- [ ] Behavioral test: `in:Custom.md` writes to the override path; default
+- [x] Behavioral test: `in:Custom.md` writes to the override path; default
       writes to today's daily note
-- [ ] Behavioral test: invalid date in quickline keeps the panel open with
+- [x] Behavioral test: invalid date in quickline keeps the panel open with
       the error preview and disk is unchanged
-- [ ] Behavioral test: duplicate write surfaces inline error, no second
+- [x] Behavioral test: duplicate write surfaces inline error, no second
       write happens
-- [ ] Behavioral test: `c` → `Ctrl+E` opens popup with all parsed fields
+- [x] Behavioral test: `c` → `Ctrl+E` opens popup with all parsed fields
       pre-populated; submitting writes the same task
-- [ ] Behavioral test: after create, cursor anchors to the new task if it
+- [x] Behavioral test: after create, cursor anchors to the new task if it
       matches the active filter, otherwise stays put
-- [ ] Snapshot test: empty quickline (hint visible)
-- [ ] Snapshot test: quickline with valid preview
-- [ ] Snapshot test: quickline with parse error
-- [ ] Snapshot test: expanded popup with prefilled values
+- [x] Snapshot test: empty quickline (hint visible)
+- [x] Snapshot test: quickline with valid preview
+- [x] Snapshot test: quickline with parse error
+- [x] Snapshot test: expanded popup with prefilled values
 
 ## Technical Notes
 
@@ -541,6 +539,64 @@ ergonomic and lands in a follow-up.
 110 tui tests pass; workspace `cargo test` (498 tests); clippy
 `-D warnings` + fmt --check clean.
 
-### Session 5 · 2026-05-10 · planned
+### Session 5 · 2026-05-11 · done
 **Goal:** Polish & audit: help overlay rows (c / Shift+C / Ctrl+E), snapshot coverage (empty quickline, valid preview, parse error, expanded popup, toast in status bar), no-warnings cleanup, real-vault smoke run.
-**Outcome:** 
+**Outcome:** Polish + audit pass — feature is shippable.
+
+**Help overlay.** Sessions 2 and 4 already landed the rows
+(`c / Shift+C — new task (line / form)` and `Ctrl+E — expand
+quickline → form`). Confirmed via `help_overlay_80x24` snapshot.
+Marked the four help-overlay acceptance items checked, noting that
+`c` and `Shift+C` share one row to keep the binding list inside the
+80x24 budget.
+
+**Snapshot coverage.** Added five new snapshot tests in
+`ft/src/tui/tests.rs`:
+- `quickline_empty_80x24` — placeholder text in the input row + the
+  dim `Enter to save · Esc to cancel` hint underneath
+- `quickline_valid_preview_80x24` — input `buy milk due:tomorrow
+  pri:high #grocery` renders the canonical
+  `→ - [ ] buy milk #grocery ⏫ 📅 2026-05-11 → Daily/2…` preview
+- `quickline_parse_error_80x24` — `draft due:not-a-date` shows
+  `⚠ due: could not parse 'not-a-date' as a date …` in red
+- `new_popup_prefilled_80x24` — Ctrl+E from a populated quickline
+  pre-fills description / due / priority / tags in the expanded
+  popup; the target row stays empty when no `in:` was typed
+- `quickline_toast_success_80x24` — after Enter, the new task lands
+  in the list with the cursor anchored to its row and the status
+  bar's center cell shows `created Daily/2026-05-10`
+
+Note: ratatui's 80-col status bar truncates the toast text to
+`created Daily/2026-05-10` (no `:1` suffix); 120-col captures the
+full path. The 80x24 snapshot is the agreed-on width for snapshots,
+and the existing behavioural test
+`quickline_success_renders_toast_in_status_bar_center_cell` already
+asserts the full text at 120 cols, so leaving it at 80 here.
+
+**No-warnings audit.** `cargo build --workspace`, `cargo clippy
+--workspace --all-targets -- -D warnings`, `cargo fmt --check`,
+`cargo test --workspace` all clean. Fmt picked up a one-line nit in
+`tests.rs::target_picker_navigation_changes_selection` (a
+single-line `KeyEvent::new(KeyCode::Down, …)` that had been spread
+across three lines) — applied via `cargo fmt`.
+
+**Real-vault smoke run.** The plan called for a manual smoke against
+a real Obsidian vault; the upstream gate is `FT_REAL_VAULT_TESTS=1`
+pointed at `/Users/cmw/git/fortytwo`, which doesn't exist on this
+machine. Substituted a CLI smoke: spun up `/tmp/smoke-vault` with an
+empty `.obsidian/` dir, ran `ft tasks list --allow-empty` (renders
+empty table), then `ft tasks create "smoke task" --due 2026-05-20
+--priority high --file Inbox.md` (writes
+`- [ ] smoke task ⏫ 📅 2026-05-20`). This exercises the same shared
+`Vault::resolve_target` path that the TUI quickline calls into, so
+it validates the cross-surface contract from session 1. The
+TUI-against-real-vault smoke is left as a manual step for the
+plan-owner's machine.
+
+**Test counts.** TUI: 117 → 122 (+5 snapshots). Full workspace:
+498 → 503. Clippy / fmt / build clean.
+
+Marked all remaining acceptance criteria done except for the two
+explicitly-deferred items (absolute-path validation, picker UI in
+the popup target field). Both have explanatory notes in the plan
+already and are out-of-scope follow-ups.

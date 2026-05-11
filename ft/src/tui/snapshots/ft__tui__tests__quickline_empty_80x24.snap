@@ -1,0 +1,28 @@
+---
+source: ft/src/tui/tests.rs
+expression: frame
+---
+  1 Welcome  │  2 Tasks                                                         
+┌ sidebar ─────────────┐┌ query ───────────────────────────────────────────────┐
+│                      ││not done and due before 2026-05-18 sort by due, priori│
+│ Sun 10 May           │└──────────────────────────────────────────────────────┘
+│ 14:32:05             │┌ new task ────────────────────────────────────────────┐
+│                      ││type a task — e.g. "email Sarah due:tomorrow pri:high │
+│ ── views ──          │└──────────────────────────────────────────────────────┘
+│ ▶ Search             │  Enter to save · Esc to cancel                         
+│                      │┌ tasks ───────────────────────────────────────────────┐
+│                      ││                   no matching tasks                  │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+│                      ││                                                      │
+└──────────────────────┘└──────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Tasks          refreshed [HH:MM:SS]      mode: normal
