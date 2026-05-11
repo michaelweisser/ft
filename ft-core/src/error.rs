@@ -17,6 +17,9 @@ pub enum Error {
         path: PathBuf,
         source: std::io::Error,
     },
+
+    #[error("notes: {0}")]
+    Notes(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;

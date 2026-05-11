@@ -4,6 +4,7 @@ pub mod dates;
 pub mod error;
 pub mod fs;
 pub mod markdown;
+pub mod notes;
 pub mod query;
 pub mod search;
 pub mod selector;

@@ -44,15 +44,15 @@ sequential pair-write.
 
 ### Library — `ft_core::notes`
 
-- [ ] `Section` struct: `heading: Heading, body: String`. `body` is the
+- [x] `Section` struct: `heading: Heading, body: String`. `body` is the
       content from the heading line (inclusive) to the next heading of
       equal-or-higher level (exclusive), or end of file. This matches
       Obsidian's fold behavior and means moving an H2 always drags its
       nested H3/H4/etc with it.
-- [ ] `extract_sections(content: &str) -> Vec<Section>` — returns sections
+- [x] `extract_sections(content: &str) -> Vec<Section>` — returns sections
       in document order. Content before the first heading is excluded.
       Frontmatter is skipped (the existing `extract_headings` rule).
-- [ ] `shift_section_level(section: &Section, new_top_level: u8) -> Result<String>` —
+- [x] `shift_section_level(section: &Section, new_top_level: u8) -> Result<String>` —
       returns the section's body with every heading level shifted by
       `new_top_level - section.heading.level`. If any nested heading would
       shift outside the ATX range `1..=6`, returns `Err`. The shift is
@@ -60,10 +60,10 @@ sequential pair-write.
       headings (i.e., skips fenced/indented code and frontmatter blocks
       inside the section body — though frontmatter inside a section body
       is exotic and treated like any other line).
-- [ ] `validate_disjoint(headings: &[&Heading]) -> Result<()>` — returns
+- [x] `validate_disjoint(headings: &[&Heading]) -> Result<()>` — returns
       `Err` if any selected heading is contained within another selected
       heading's section. Identified by line range (not text).
-- [ ] `move_sections(source: &str, picks: &[SectionPick], target: &str, plan: &[Placement]) -> Result<(String, String)>` —
+- [x] `move_sections(source: &str, picks: &[SectionPick], target: &str, plan: &[Placement]) -> Result<(String, String)>` —
       where `SectionPick { line: usize, new_level: u8 }` identifies a
       heading in the source by line number and the target level for the
       move, and `Placement { pick_idx: usize, after_line: Option<usize> }`
@@ -71,7 +71,7 @@ sequential pair-write.
       "top of file, before all headings"). Returns
       `(new_source_content, new_target_content)`. Multiple picks may share
       placements that interleave with the target's existing headings.
-- [ ] `write_pair(target_path, target_content, source_path, source_content) -> Result<()>` —
+- [x] `write_pair(target_path, target_content, source_path, source_content) -> Result<()>` —
       writes target first, then source, each via `fs::write_atomic`. Order
       matters: a crash between the two writes leaves the moved sections
       duplicated (recoverable by hand) rather than lost.
@@ -300,13 +300,29 @@ sequential pair-write.
 
 ## Sessions
 
-### Session 1 · 2026-05-11 · planned
+### Session 1 · 2026-05-11 · done
 **Goal:** Library primitives. `ft_core::notes` module with `Section`,
 `extract_sections`, `shift_section_level`, `validate_disjoint`,
 `move_sections`, and `write_pair`. Full unit-test coverage for each
 primitive, including cascade-overflow, disjoint validation, and the
 multi-section move case. No CLI, no TUI.
-**Outcome:**
+**Outcome:** Added `ft-core/src/notes.rs` with the full primitive API:
+`Section`, `SectionPick`, `Placement`, `extract_sections`,
+`shift_section_level`, `validate_disjoint`, `move_sections`,
+`write_pair`. Added `Error::Notes(String)` and registered the module in
+`lib.rs`. 32 unit tests cover empty inputs, frontmatter skip, nested
+H2/H3 folding, sibling H2s, sub-heading-as-pick (validate_disjoint
+rejects parent+child, accepts siblings), cascade shifts in both
+directions with H6/H1 overflow, code-fence pseudo-headings preserved
+during shift, multi-pick moves with shared placement, top-of-file
+insert (`after_line: None`), and append-after-last-heading. Key design
+choice: `extract_sections` returns *every* heading (not just top-level)
+so any nested heading is a valid pick target — the `body` field still
+extends to the next equal-or-higher heading, so an outer H2 contains
+its inner H3, and `validate_disjoint` catches the overlap when both
+are picked. All workspace tests (286 + integration + the 32 new) pass;
+`cargo clippy --workspace --all-targets -- -D warnings` and
+`cargo fmt --check` clean.
 
 ### Session 2 · planned
 **Goal:** CLI commands. `ft notes open` (top-hit + `$EDITOR` + `--obsidian`)
@@ -331,4 +347,3 @@ picker, compose view with `Shift+↑/↓` reorder + `←/→` level-shift.
 Commit calls `move_sections` + `write_pair` and emits a success toast.
 Snapshot tests for each step plus a full end-to-end key-driven test.
 **Outcome:**
-
