@@ -2158,3 +2158,289 @@ fn notes_tab_open_picker_esc_returns_to_idle() -> Result<()> {
     );
     Ok(())
 }
+
+// ── Notes tab · section-move flow (plan 003 · session 4) ─────────────────
+
+/// Vault tailored for the section-move flow. Two notes with a few headings
+/// and a known nested structure: `project.md` has H1 + two H2s, one of
+/// which has an H3 child — the nested heading lets us exercise the
+/// implicit-selection cascade.
+fn notes_move_vault() -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(
+        vault_path.join("project.md"),
+        "# Project\n\n## Background\n\nIntro.\n\n### Details\n\nMore.\n\n## Tasks\n\n- Do thing\n",
+    )
+    .unwrap();
+    std::fs::write(
+        vault_path.join("archive.md"),
+        "# Archive\n\n## Old\n\nStale notes.\n",
+    )
+    .unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+/// Drive the Notes tab into the heading-multi-select step with
+/// `project.md` as the source. Returns the populated App.
+fn drive_to_multiselect(vault: Vault) -> Result<App> {
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('m'))?;
+    for c in "project".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    Ok(app)
+}
+
+#[test]
+fn notes_move_source_picker_opens_on_m() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('m'))?;
+    for c in "project".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_source_picker_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_source_picker_esc_returns_to_idle() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('m'))?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("1/4 source"),
+        "source picker should be closed:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_multiselect_renders_after_source_pick() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2/4 select"),
+        "should land on multi-select step:\n{frame}"
+    );
+    assert!(
+        frame.contains("Background"),
+        "headings should be listed:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_multiselect_implicit_descendants_dim() -> Result<()> {
+    // Select the H2 "Background" — its H3 child "Details" should show
+    // as implicitly included, with the dimmed marker glyph.
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    // Focus is on heading 0 (H1 "Project"). Move to "Background" (idx 1).
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_multiselect_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_multiselect_descendant_toggle_blocked_by_parent() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    // Select Background (idx 1) — Details (idx 2) becomes implicit.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // Move to Details and try to toggle — should be a no-op.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    // Now deselect Background — Details should return to unselected (no
+    // implicit, no explicit).
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    // After deselecting Background, no row should carry an explicit or
+    // implicit marker — only the empty box.
+    assert!(
+        !frame.contains('■') && !frame.contains('▣'),
+        "all selection markers should be cleared:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_multiselect_enter_advances_to_target_picker() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    // Pick H1 Project (focus starts here).
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "archive".chars() {
+        app.dispatch(key(c))?;
+    }
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_move_target_picker_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn notes_move_multiselect_enter_with_no_selection_stays() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2/4 select"),
+        "should remain on multi-select with no picks:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_multiselect_esc_returns_to_source_picker() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("1/4 source"),
+        "should return to source picker:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_target_same_file_rejected_inline() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    // Pick H1 and advance to target picker.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Type a query that matches the source file.
+    for c in "project".chars() {
+        app.dispatch(key(c))?;
+    }
+    // Press Enter on the source file (same path) — should be rejected.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("same-file move"),
+        "footer should explain the rejection:\n{frame}"
+    );
+    assert!(
+        frame.contains("3/4 target"),
+        "should still be on target step:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_target_enter_queues_placeholder_toast_and_returns_to_idle() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    for c in "archive".chars() {
+        app.dispatch(key(c))?;
+    }
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("Enter on valid target should queue a toast");
+    match req {
+        AppRequest::Toast { text, .. } => {
+            assert!(
+                text.contains("session 5"),
+                "placeholder toast must reference session 5: {text}"
+            );
+        }
+        other => panic!("expected Toast, got {other:?}"),
+    }
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        !frame.contains("3/4 target") && !frame.contains("2/4 select"),
+        "should be back on idle:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_move_target_esc_returns_to_multiselect_preserving_picks() -> Result<()> {
+    let (_dir, vault) = notes_move_vault();
+    let mut app = drive_to_multiselect(vault)?;
+    // Pick H1 Project (focus starts here) then advance.
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char(' '),
+        KeyModifiers::NONE,
+    )))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    // Back out without picking a target.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Esc, KeyModifiers::NONE)))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("2/4 select"),
+        "should be back on multi-select:\n{frame}"
+    );
+    // The explicit-pick marker should still be visible for `Project`.
+    assert!(
+        frame.contains('■'),
+        "selection should be preserved:\n{frame}"
+    );
+    Ok(())
+}

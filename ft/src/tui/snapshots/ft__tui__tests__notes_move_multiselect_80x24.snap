@@ -1,0 +1,29 @@
+---
+source: ft/src/tui/tests.rs
+assertion_line: 2260
+expression: frame
+---
+  1 Welcome  │  2 Tasks  │  3 Notes                                             
+┌ notes ───────────────────────────────────────────────────────────────────────┐
+│                                                                              │
+│  Notes — Obsidian-flavoured editing                                          │
+│           ┌ move · 2/4 select · project.md ──────────────────────┐           │
+│  o     ope│  □ H1  Project                                       │           │
+│  m     mov│▶ ■   H2  Background                                  │           │
+│  ?     sho│  ▣     H3  Details                                   │           │
+│  Esc   clo│  □   H2  Tasks                                       │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │                                                      │           │
+│           │   ↑/↓ focus   Space toggle   Enter next   Esc back   │           │
+│           └──────────────────────────────────────────────────────┘           │
+│                                                                              │
+│                                                                              │
+└──────────────────────────────────────────────────────────────────────────────┘
+ vault: test-vault  ·  tab: Notes           not yet refreshed      mode: normal

@@ -433,7 +433,7 @@ Full workspace test suite passes (289 tests + integration files);
 `cargo clippy --workspace --all-targets -- -D warnings` and
 `cargo fmt --check` clean.
 
-### Session 4 · 2026-05-11 · planned
+### Session 4 · 2026-05-11 · done
 **Goal:** Section-move flow — steps 1-3 (source pick, heading
 multi-select, target pick). Implement `SectionMoveState` enum with
 `SourcePicking`, `HeadingMultiSelect`, `TargetPicking` variants and the
@@ -444,7 +444,38 @@ compose view yet — `Enter` in `TargetPicking` lands on a placeholder
 `Composing` state that immediately falls back to idle with a toast
 (`compose view lands in session 5`). Snapshots: source picker, heading
 multi-select with mixed explicit/implicit selection, target picker.
-**Outcome:**
+**Outcome:** Extended `NotesState` with `MoveSection(SectionMoveState)` and
+added the three-variant `SectionMoveState::{SourcePicking,
+HeadingMultiSelect, TargetPicking}` plus the `ClipboardItem` payload
+(`#[allow(dead_code)]` on the fields session 5 will consume). Key dispatch
+split into per-step handlers returning a `MoveAction::{Stay, NotHandled,
+Set(Box<NotesState>)}` (the Box is to keep variants similarly sized for
+clippy's `large_enum_variant`); `std::mem::take` carries state across
+`Esc TargetPicking → HeadingMultiSelect` so prior picks survive a target
+re-pick. Implicit-descendant cascade computed on the fly
+(`is_implicitly_selected` + `descendant_lines`) so deselecting a parent
+restores child idle state with no bookkeeping; `Space` on a focused
+heading is a no-op when an ancestor is explicitly picked, with a toast
+explaining why. `Enter` in step 2 builds the clipboard via
+`extract_sections` (skipping any heading already in an ancestor's
+extracted body), sorted by source line. Same-file target pick rejected
+inline by stashing a footer error on `TargetPicking`; the error clears
+on the next picker keystroke. Successful target `Enter` queues a toast
+preview (`compose view lands in session 5 — would move N section(s):
+<src> → <dst>`) and returns to idle. View layer: shared
+`render_picker_popup` (used by Open/Source/Target with their own
+per-step titles + keymap footers), `render_multiselect_popup` with
+`■` explicit / `▣` implicit / `□` unselected glyphs and level-tagged
+indent. Added 11 new tests in `tui::tests`: 3 snapshots
+(`notes_move_source_picker_80x24`, `notes_move_multiselect_80x24`
+with mixed explicit/implicit selection, `notes_move_target_picker_80x24`)
+and 8 behavior tests covering `m` opens source picker, Esc back to idle,
+multi-select renders + cascade + toggle-blocked + Enter-on-empty stays,
+Esc back to source picker, Enter advances to target picker, same-file
+inline reject, target Enter queues placeholder toast + returns to idle,
+target Esc returns to multi-select with picks preserved. Workspace tests
+all green (144 TUI + 289 ft_core + integration); `cargo clippy --workspace
+--all-targets -- -D warnings` and `cargo fmt --check` clean.
 
 ### Session 5 · 2026-05-11 · planned
 **Goal:** Compose view + commit. Implement the `Composing` variant with
