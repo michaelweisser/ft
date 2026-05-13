@@ -1,7 +1,10 @@
+use std::sync::Arc;
+
 use anyhow::Result;
 use assert_fs::TempDir;
 use chrono::{DateTime, Local, TimeZone};
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
+use ft_core::recents::RecentsLog;
 use ft_core::vault::Vault;
 use ratatui::{backend::TestBackend, Terminal};
 
@@ -3015,5 +3018,274 @@ fn notes_move_compose_rename_e2e_two_h2_picks() -> Result<()> {
         "original 'Tasks' title should NOT appear:\n{new_target}"
     );
     drop(dir);
+    Ok(())
+}
+
+// ── plan 008: empty-input picker shows recents ───────────────────────────────
+
+/// Build a notes vault with explicit deterministic mtimes so recents tests
+/// can assert ordering by recency rather than relying on file-system
+/// resolution. `files` is `(rel_path, body, mtime_offset_seconds_from_base)`
+/// — bigger offset = newer file.
+fn recents_vault(files: &[(&str, &str, u64)]) -> (TempDir, Vault) {
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let base = std::time::SystemTime::now();
+    for (rel, body, offset) in files {
+        let abs = vault_path.join(rel);
+        if let Some(p) = abs.parent() {
+            std::fs::create_dir_all(p).unwrap();
+        }
+        std::fs::write(&abs, body).unwrap();
+        let mt = base + std::time::Duration::from_secs(*offset);
+        if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&abs) {
+            let _ = f.set_times(std::fs::FileTimes::new().set_modified(mt));
+        }
+    }
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    (dir, vault)
+}
+
+fn make_test_recents(vault: &Vault, tmp: &TempDir) -> Arc<RecentsLog> {
+    let log_path = tmp.path().join("recents.jsonl");
+    Arc::new(RecentsLog::with_log_path(vault.path.clone(), log_path))
+}
+
+#[test]
+fn notes_open_picker_shows_logged_open_first() -> Result<()> {
+    let (dir, vault) = recents_vault(&[
+        ("alpha.md", "# Alpha\n", 100),
+        ("beta.md", "# Beta\n", 200),
+        ("gamma.md", "# Gamma\n", 300),
+    ]);
+    let recents = make_test_recents(&vault, &dir);
+    // Log an open on alpha — even though gamma has the newest mtime,
+    // alpha should lead the recents list because opens beat mtime.
+    recents.record_open(std::path::Path::new("alpha.md"));
+
+    let mut app = App::for_test_with_recents(vault, recents);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+
+    let frame = render(&mut app, 80, 24);
+    // The "recent" title flips on for empty input + populated items.
+    assert!(
+        frame.contains("recent"),
+        "expected `recent` in title for empty-input picker:\n{frame}"
+    );
+    // All three files appear; alpha is on the first row (after the
+    // input-box rows).
+    assert!(frame.contains("alpha.md"));
+    assert!(frame.contains("beta.md"));
+    assert!(frame.contains("gamma.md"));
+    let alpha_pos = frame.find("alpha.md").unwrap();
+    let beta_pos = frame.find("beta.md").unwrap();
+    let gamma_pos = frame.find("gamma.md").unwrap();
+    assert!(
+        alpha_pos < beta_pos && alpha_pos < gamma_pos,
+        "alpha (opened) must appear above beta and gamma (mtime only)"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_open_picker_empty_log_falls_back_to_mtime() -> Result<()> {
+    let (dir, vault) = recents_vault(&[
+        ("oldest.md", "# O\n", 10),
+        ("middle.md", "# M\n", 100),
+        ("newest.md", "# N\n", 1000),
+    ]);
+    let recents = make_test_recents(&vault, &dir);
+    let mut app = App::for_test_with_recents(vault, recents);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+
+    let frame = render(&mut app, 80, 24);
+    let newest_pos = frame.find("newest.md").unwrap();
+    let middle_pos = frame.find("middle.md").unwrap();
+    let oldest_pos = frame.find("oldest.md").unwrap();
+    assert!(
+        newest_pos < middle_pos && middle_pos < oldest_pos,
+        "expected mtime order newest→middle→oldest; got positions {newest_pos}, {middle_pos}, {oldest_pos}\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_open_picker_cold_start_shows_type_to_search_hint() -> Result<()> {
+    // Vault has zero `.md` files — recents list is empty, picker should
+    // fall back to the legacy "type to search…" hint.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    let vault = Vault::discover(Some(vault_path)).unwrap();
+    let recents = make_test_recents(&vault, &dir);
+    let mut app = App::for_test_with_recents(vault, recents);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("type to search"),
+        "cold-start picker should show legacy hint:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_open_picker_typing_transitions_from_recents_to_results() -> Result<()> {
+    let (dir, vault) = recents_vault(&[("alpha.md", "# A\n", 100), ("beta.md", "# B\n", 200)]);
+    let recents = make_test_recents(&vault, &dir);
+    let mut app = App::for_test_with_recents(vault, recents);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+
+    // Empty input → "recent · type to search" title.
+    let frame = render(&mut app, 80, 24);
+    assert!(frame.contains("recent"));
+
+    // Typing one char flips to fuzzy mode → title is " results ".
+    app.dispatch(key('a'))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("results"),
+        "typing should switch to results mode:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_open_picker_backspace_returns_to_recents() -> Result<()> {
+    let (dir, vault) = recents_vault(&[("alpha.md", "# A\n", 100), ("beta.md", "# B\n", 200)]);
+    let recents = make_test_recents(&vault, &dir);
+    let mut app = App::for_test_with_recents(vault, recents);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+    // Type then immediately erase — should land back in recents mode.
+    app.dispatch(key('a'))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Backspace,
+        KeyModifiers::NONE,
+    )))?;
+    let frame = render(&mut app, 80, 24);
+    assert!(
+        frame.contains("recent"),
+        "backspace to empty input should restore recents mode:\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_open_picker_enter_on_recent_records_and_reopens_at_top() -> Result<()> {
+    // End-to-end: open picker, select gamma (mtime-newest), the open is
+    // recorded, then re-open picker and assert gamma still leads — but
+    // now because it was *opened* (its log entry beats any mtime tail).
+    let (dir, vault) = recents_vault(&[
+        ("alpha.md", "# A\n", 100),
+        ("beta.md", "# B\n", 200),
+        ("gamma.md", "# G\n", 300),
+    ]);
+    let recents = make_test_recents(&vault, &dir);
+    // Pre-seed with alpha so it's "second" in the merged list — gamma's
+    // mtime puts it first. After the user opens gamma, we should still
+    // see gamma at top (now via the opens slice).
+    recents.record_open(std::path::Path::new("alpha.md"));
+    let recents_clone = Arc::clone(&recents);
+
+    let mut app = App::for_test_with_recents(vault, recents_clone);
+    app.switch_to(NOTES_TAB_INDEX)?;
+
+    // First open: pick gamma (rendered at top thanks to mtime).
+    app.dispatch(key('o'))?;
+    // Navigate: with opens-first, alpha is row 0, then mtime-ordered
+    // gamma (row 1) → beta (row 2). Press Down to land on gamma.
+    app.dispatch(Event::Key(KeyEvent::new(KeyCode::Down, KeyModifiers::NONE)))?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Enter,
+        KeyModifiers::NONE,
+    )))?;
+    let req = app
+        .take_pending_request()
+        .expect("Enter should queue OpenInEditor");
+    match req {
+        AppRequest::OpenInEditor { path, .. } => {
+            assert!(
+                path.to_string_lossy().ends_with("gamma.md"),
+                "expected gamma.md got {path:?}"
+            );
+        }
+        other => panic!("expected OpenInEditor, got {other:?}"),
+    }
+
+    // After the open, both alpha and gamma should be in the recents
+    // log, with gamma most recent.
+    let logged = recents.load_recent(10);
+    assert_eq!(
+        logged,
+        vec![
+            std::path::PathBuf::from("gamma.md"),
+            std::path::PathBuf::from("alpha.md")
+        ],
+        "recents log should reflect both opens with gamma newest"
+    );
+
+    // Re-open picker. gamma is now top of the opens slice.
+    app.dispatch(key('o'))?;
+    let frame = render(&mut app, 80, 24);
+    let gamma_pos = frame.find("gamma.md").unwrap();
+    let alpha_pos = frame.find("alpha.md").unwrap();
+    let beta_pos = frame.find("beta.md").unwrap();
+    assert!(
+        gamma_pos < alpha_pos && alpha_pos < beta_pos,
+        "after open, expected gamma → alpha → beta order; got positions {gamma_pos}, {alpha_pos}, {beta_pos}\n{frame}"
+    );
+    Ok(())
+}
+
+#[test]
+fn notes_open_picker_recents_snapshot_80x24() -> Result<()> {
+    let (dir, vault) = recents_vault(&[
+        ("project.md", "# Project\n", 100),
+        ("inbox.md", "# Inbox\n", 200),
+        ("notes/daily.md", "# Daily\n", 300),
+    ]);
+    let recents = make_test_recents(&vault, &dir);
+    // Mixed signals: project is opened (top); inbox + daily fill via
+    // mtime tail (daily newer than inbox).
+    recents.record_open(std::path::Path::new("project.md"));
+
+    let mut app = App::for_test_with_clock_and_recents(vault, fixed_clock, recents);
+    app.switch_to(NOTES_TAB_INDEX)?;
+    app.dispatch(key('o'))?;
+    let frame = render(&mut app, 80, 24);
+    assert_tui_snapshot!("notes_open_picker_recents_80x24", frame);
+    Ok(())
+}
+
+#[test]
+fn cli_record_open_through_recents_log() -> Result<()> {
+    // Verify the CLI path: `RecentsLog::for_vault(&vault).record_open(...)`
+    // writes to the per-vault log. Uses an isolated XDG_STATE_HOME so we
+    // don't touch the user's real state dir.
+    let dir = TempDir::new().unwrap();
+    let vault_path = dir.path().join("test-vault");
+    std::fs::create_dir_all(vault_path.join(".obsidian")).unwrap();
+    std::fs::write(vault_path.join("note.md"), "# N\n").unwrap();
+    let vault = Vault::discover(Some(vault_path.clone())).unwrap();
+
+    let state_root = dir.path().join("state");
+    let prev = std::env::var_os("XDG_STATE_HOME");
+    std::env::set_var("XDG_STATE_HOME", &state_root);
+    let log = RecentsLog::for_vault(&vault);
+    log.record_open(std::path::Path::new("note.md"));
+    // Read it back via the same construction to confirm round-trip.
+    let log2 = RecentsLog::for_vault(&vault);
+    let entries = log2.load_recent(10);
+    match prev {
+        Some(v) => std::env::set_var("XDG_STATE_HOME", v),
+        None => std::env::remove_var("XDG_STATE_HOME"),
+    }
+    assert_eq!(entries, vec![std::path::PathBuf::from("note.md")]);
     Ok(())
 }

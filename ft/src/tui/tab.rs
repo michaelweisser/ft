@@ -4,6 +4,7 @@ use std::sync::Arc;
 
 use anyhow::Result;
 use chrono::{DateTime, Local, NaiveDate};
+use ft_core::recents::RecentsLog;
 use ft_core::vault::Vault;
 use ratatui::{layout::Rect, Frame};
 
@@ -74,6 +75,11 @@ pub struct TabCtx<'a> {
     /// Existing `ctx.vault.scan()` / `ctx.vault.path` callers keep working
     /// through `Arc`'s auto-deref to `&Vault`.
     pub vault: &'a Arc<Vault>,
+    /// Per-vault "recently opened notes" log (plan 008). Shared across
+    /// the four picker sites so an open recorded by one shows up in the
+    /// others, and shared with the open-chokepoint sites so opens get
+    /// recorded as the user navigates.
+    pub recents: &'a Arc<RecentsLog>,
     pub today: NaiveDate,
     pub last_refresh: &'a Cell<Option<DateTime<Local>>>,
     /// Pending side-effect for the App to handle after `handle_event` returns.

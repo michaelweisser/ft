@@ -1598,7 +1598,10 @@ fn build_quickline_preview<'a>(ql: &Quickline, ctx: &TabCtx) -> Line<'a> {
 /// field's current text when triggered by Enter — so a partial query
 /// the user already typed becomes the starting query.
 fn open_target_picker(popup: &mut EditPopup, ctx: &TabCtx, seed_char: Option<char>) {
-    let source = VaultFilePickerSource::new(std::sync::Arc::clone(ctx.vault));
+    let source = VaultFilePickerSource::new(
+        std::sync::Arc::clone(ctx.vault),
+        std::sync::Arc::clone(ctx.recents),
+    );
     let mut picker = FuzzyPicker::new(source);
     // Seed: either the keystroke that triggered the open, or the
     // current field text. We send each char through `handle_key` so

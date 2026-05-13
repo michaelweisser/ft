@@ -81,6 +81,24 @@ impl Vault {
         scan
     }
 
+    /// Walk the vault and pair each markdown file with its `mtime`.
+    ///
+    /// Same exclusion rules as [`Self::markdown_files`]. Files whose
+    /// metadata can't be read are kept in the result with mtime set to
+    /// `SystemTime::UNIX_EPOCH` so they still appear (last) in any
+    /// recency ranking rather than being silently dropped.
+    pub(crate) fn markdown_files_with_mtime(&self) -> Vec<(PathBuf, std::time::SystemTime)> {
+        self.markdown_files()
+            .into_iter()
+            .map(|p| {
+                let mtime = std::fs::metadata(&p)
+                    .and_then(|m| m.modified())
+                    .unwrap_or(std::time::SystemTime::UNIX_EPOCH);
+                (p, mtime)
+            })
+            .collect()
+    }
+
     pub(crate) fn markdown_files(&self) -> Vec<PathBuf> {
         let mut overrides = OverrideBuilder::new(&self.path);
         for default in DEFAULT_IGNORED {

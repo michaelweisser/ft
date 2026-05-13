@@ -6,6 +6,7 @@ pub mod fs;
 pub mod markdown;
 pub mod notes;
 pub mod query;
+pub mod recents;
 pub mod search;
 pub mod selector;
 pub mod task;

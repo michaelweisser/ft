@@ -19,7 +19,8 @@
 use std::sync::Arc;
 
 use crossterm::event::{KeyCode, KeyEvent, KeyModifiers};
-use ft_core::search::{fuzzy_find, Hit, Query, SearchOptions};
+use ft_core::recents::RecentsLog;
+use ft_core::search::{fuzzy_find, recent_hits, Hit, Query, SearchOptions};
 use ft_core::vault::Vault;
 use nucleo_matcher::pattern::{CaseMatching, Normalization, Pattern};
 use nucleo_matcher::{Config, Matcher, Utf32Str};
@@ -52,6 +53,14 @@ pub struct PickerItem<T> {
 pub trait PickerSource {
     type Item;
     fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<Self::Item>>;
+
+    /// Rows shown when the input is empty. Default returns `Vec::new()`,
+    /// preserving the legacy "type to search…" behavior for sources that
+    /// don't opt in. [`VaultFilePickerSource`] overrides this to surface
+    /// recent notes (plan 008).
+    fn initial_items(&mut self, _limit: usize) -> Vec<PickerItem<Self::Item>> {
+        Vec::new()
+    }
 }
 
 /// What the caller should do after dispatching a key.
@@ -89,7 +98,7 @@ pub struct FuzzyPicker<S: PickerSource> {
 
 impl<S: PickerSource> FuzzyPicker<S> {
     pub fn new(source: S) -> Self {
-        Self {
+        let mut picker = Self {
             source,
             input: EditBuffer::default(),
             items: Vec::new(),
@@ -97,12 +106,21 @@ impl<S: PickerSource> FuzzyPicker<S> {
             scroll: 0,
             last_query: None,
             limit: 50,
-        }
+        };
+        // Pull initial items (typically a recents list) so the first
+        // render is non-empty when the source opts into the recents API.
+        // Sources keeping the default empty `initial_items` impl pay
+        // nothing here.
+        picker.refresh();
+        picker
     }
 
-    /// Override the default per-query result cap.
+    /// Override the default per-query result cap. Re-pulls initial items
+    /// so they reflect the new cap on the next render.
     pub fn with_limit(mut self, limit: usize) -> Self {
         self.limit = limit;
+        self.last_query = None;
+        self.refresh();
         self
     }
 
@@ -188,12 +206,18 @@ impl<S: PickerSource> FuzzyPicker<S> {
     }
 
     /// Re-run the source query if the input changed since the last refresh.
+    /// Empty input routes through [`PickerSource::initial_items`] so sources
+    /// that opt in can surface a recents list before the user types.
     fn refresh(&mut self) {
         let current = self.input.text.clone();
         if self.last_query.as_deref() == Some(&current) {
             return;
         }
-        self.items = self.source.query(&current, self.limit);
+        self.items = if current.is_empty() {
+            self.source.initial_items(self.limit)
+        } else {
+            self.source.query(&current, self.limit)
+        };
         self.selected = 0;
         self.scroll = 0;
         self.last_query = Some(current);
@@ -265,11 +289,19 @@ impl<S: PickerSource> FuzzyPicker<S> {
     }
 
     fn render_list(&self, frame: &mut Frame, area: Rect) {
-        let block = Block::default().borders(Borders::ALL).title(" results ");
+        // Empty input + non-empty items means we're showing the source's
+        // initial items (typically a recents list). Flip the title so the
+        // user knows these rows are pre-populated rather than filtered.
+        let title = if self.input.text.is_empty() && !self.items.is_empty() {
+            " recent · type to search "
+        } else {
+            " results "
+        };
+        let block = Block::default().borders(Borders::ALL).title(title);
         let inner = block.inner(area);
         frame.render_widget(block, area);
 
-        if self.input.text.is_empty() {
+        if self.input.text.is_empty() && self.items.is_empty() {
             let hint = Paragraph::new(Line::from(Span::styled(
                 "type to search…",
                 Style::default()
@@ -368,6 +400,10 @@ fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
 
 // ── concrete source: vault files + headings ─────────────────────────────
 
+/// Hard cap on the number of recents shown on empty input. Picked to
+/// match the user-visible "25 most recent" promise from plan 008.
+const RECENTS_DISPLAY_LIMIT: usize = 25;
+
 /// File / heading [`PickerSource`] backed by [`Vault::fuzzy_find`].
 ///
 /// Holds two `Matcher`s (one path-aware for the file part, one default for
@@ -376,17 +412,22 @@ fn make_span(text: String, highlight: bool, row_style: Style) -> Span<'static> {
 ///
 /// Owns an `Arc<Vault>` rather than `&Vault` so the source can outlive a
 /// single event-loop borrow of `App` — the picker lives inside the popup
-/// while the same `App` that owns it also owns the vault.
+/// while the same `App` that owns it also owns the vault. The
+/// `Arc<RecentsLog>` is shared across all four picker sites (notes
+/// open/source/target + tasks target) so an open recorded in one site
+/// surfaces immediately in the next.
 pub struct VaultFilePickerSource {
     vault: Arc<Vault>,
+    recents: Arc<RecentsLog>,
     path_matcher: Matcher,
     text_matcher: Matcher,
 }
 
 impl VaultFilePickerSource {
-    pub fn new(vault: Arc<Vault>) -> Self {
+    pub fn new(vault: Arc<Vault>, recents: Arc<RecentsLog>) -> Self {
         Self {
             vault,
+            recents,
             path_matcher: Matcher::new(Config::DEFAULT.match_paths()),
             text_matcher: Matcher::new(Config::DEFAULT),
         }
@@ -395,6 +436,18 @@ impl VaultFilePickerSource {
 
 impl PickerSource for VaultFilePickerSource {
     type Item = Hit;
+
+    fn initial_items(&mut self, limit: usize) -> Vec<PickerItem<Hit>> {
+        let cap = limit.min(RECENTS_DISPLAY_LIMIT);
+        recent_hits(&self.vault, &self.recents, cap)
+            .into_iter()
+            .map(|hit| PickerItem {
+                label: hit.path.display().to_string(),
+                match_indices: Vec::new(),
+                data: hit,
+            })
+            .collect()
+    }
 
     fn query(&mut self, q: &str, limit: usize) -> Vec<PickerItem<Hit>> {
         let parsed = Query::parse(q);
@@ -617,11 +670,11 @@ mod tests {
 
     #[test]
     fn arrows_navigate_selection_with_wrap() {
+        // StaticSource's substring filter matches every row for any
+        // single character that's present in alpha/beta/gamma; an `a`
+        // matches all three.
         let mut p = FuzzyPicker::new(rows_a_b_c());
-        // Empty query matches everything in the substring filter, so 3 rows.
-        // Trigger a refresh by inserting then deleting a char.
         p.handle_key(key('a'));
-        p.handle_key(KeyEvent::new(KeyCode::Backspace, KeyModifiers::NONE));
         assert_eq!(p.items.len(), 3);
         // Up from 0 should wrap to last.
         p.handle_key(KeyEvent::new(KeyCode::Up, KeyModifiers::NONE));
@@ -659,13 +712,21 @@ mod tests {
         (dir, Arc::new(vault))
     }
 
+    /// Empty in-memory recents log for tests that just want to exercise
+    /// fuzzy-search behavior without recents in the picture.
+    fn empty_recents(vault: &Vault, dir: &TempDir) -> Arc<RecentsLog> {
+        let log_path = dir.path().join("recents.jsonl");
+        Arc::new(RecentsLog::with_log_path(vault.path.clone(), log_path))
+    }
+
     #[test]
     fn vault_picker_returns_hit_with_match_indices() {
-        let (_dir, vault) = make_vault(&[
+        let (dir, vault) = make_vault(&[
             ("General Considerations.md", "# Intro\n### First Try\n"),
             ("unrelated.md", "# Z\n"),
         ]);
-        let mut src = VaultFilePickerSource::new(vault);
+        let recents = empty_recents(&vault, &dir);
+        let mut src = VaultFilePickerSource::new(vault, recents);
         let items = src.query("gen consid#Firs", 10);
         assert!(!items.is_empty(), "expected at least one item");
         let top = &items[0];
@@ -689,8 +750,9 @@ mod tests {
 
     #[test]
     fn vault_picker_empty_query_returns_empty() {
-        let (_dir, vault) = make_vault(&[("a.md", "# A\n")]);
-        let mut src = VaultFilePickerSource::new(vault);
+        let (dir, vault) = make_vault(&[("a.md", "# A\n")]);
+        let recents = empty_recents(&vault, &dir);
+        let mut src = VaultFilePickerSource::new(vault, recents);
         assert!(src.query("", 10).is_empty());
     }
 
@@ -699,7 +761,7 @@ mod tests {
         // Three notes — two whose names match the file-part query `gen
         // consid`, plus one that doesn't, so the snapshot exercises the
         // file matcher dropping a non-match while keeping its sibling.
-        let (_dir, vault) = make_vault(&[
+        let (dir, vault) = make_vault(&[
             (
                 "Areas/General Considerations.md",
                 "# Intro\n### First Try\n",
@@ -710,7 +772,8 @@ mod tests {
             ),
             ("Inbox/unrelated.md", "# Z\n"),
         ]);
-        let src = VaultFilePickerSource::new(vault);
+        let recents = empty_recents(&vault, &dir);
+        let src = VaultFilePickerSource::new(vault, recents);
         let mut picker = FuzzyPicker::new(src).with_limit(10);
         for c in "gen consid#Firs".chars() {
             picker.handle_key(key(c));

@@ -22,6 +22,7 @@
 //! headings on top of the nucleo score so `# Big Topic` outranks a deeply
 //! nested `###### Big Topic` when both have equal fuzzy quality.
 
+use std::collections::HashSet;
 use std::path::{Path, PathBuf};
 
 use nucleo_matcher::{
@@ -31,6 +32,7 @@ use nucleo_matcher::{
 use rayon::prelude::*;
 
 use crate::markdown::{extract_headings, Heading};
+use crate::recents::RecentsLog;
 use crate::vault::Vault;
 
 // ── public types ─────────────────────────────────────────────────────────────
@@ -270,6 +272,77 @@ fn level_bonus(level: u8) -> u32 {
         2 => 6,
         3 => 3,
         _ => 0,
+    }
+}
+
+// ── recents merge ────────────────────────────────────────────────────────────
+
+/// Build the "empty-input" picker list: opens-first, mtime-tail.
+///
+/// 1. Pull up to `limit * 2` paths from `recents` (oversample so paths
+///    that no longer exist in the vault don't shrink the result below
+///    `limit`).
+/// 2. Walk the vault for the current markdown file set with mtimes.
+/// 3. Emit opens first in recency order, filtered against the live file
+///    set so deleted notes don't appear.
+/// 4. Fill the tail with mtime-ordered files not already taken.
+///
+/// `Hit.path` is vault-relative for consistency with [`fuzzy_find`].
+/// All scores are zero and `heading` is `None` — the picker renders
+/// these rows verbatim, with no match highlighting.
+pub fn recent_hits(vault: &Vault, recents: &RecentsLog, limit: usize) -> Vec<Hit> {
+    if limit == 0 {
+        return Vec::new();
+    }
+
+    let opens = recents.load_recent(limit.saturating_mul(2));
+
+    let files_with_mtime: Vec<(PathBuf, std::time::SystemTime)> = vault
+        .markdown_files_with_mtime()
+        .into_iter()
+        .map(|(abs, mt)| (rel(&abs, &vault.path), mt))
+        .collect();
+    let file_set: HashSet<PathBuf> = files_with_mtime.iter().map(|(p, _)| p.clone()).collect();
+
+    let mut seen: HashSet<PathBuf> = HashSet::new();
+    let mut out: Vec<Hit> = Vec::with_capacity(limit);
+
+    for path in opens {
+        if !file_set.contains(&path) {
+            continue;
+        }
+        if seen.insert(path.clone()) {
+            out.push(recent_hit(path));
+            if out.len() >= limit {
+                return out;
+            }
+        }
+    }
+
+    let mut tail: Vec<(PathBuf, std::time::SystemTime)> = files_with_mtime
+        .into_iter()
+        .filter(|(p, _)| !seen.contains(p))
+        .collect();
+    // Newest mtime first; stable lexicographic tiebreaker keeps results
+    // deterministic when two files share an mtime (common in tests).
+    tail.sort_by(|a, b| b.1.cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
+
+    for (path, _mt) in tail {
+        out.push(recent_hit(path));
+        if out.len() >= limit {
+            break;
+        }
+    }
+    out
+}
+
+fn recent_hit(path: PathBuf) -> Hit {
+    Hit {
+        path,
+        file_score: 0,
+        heading: None,
+        heading_score: None,
+        total_score: 0,
     }
 }
 
@@ -624,5 +697,167 @@ mod tests {
             warm.as_millis() < 250,
             "warm file+heading query took {warm:?}; budget 50ms (5x debug headroom)"
         );
+    }
+
+    // ── recent_hits ─────────────────────────────────────────────────
+
+    fn make_recents_for(vault: &Vault, tmp: &TempDir) -> RecentsLog {
+        let log_path = tmp.path().join("recents.jsonl");
+        RecentsLog::with_log_path(vault.path.clone(), log_path)
+    }
+
+    #[test]
+    fn recent_hits_mtime_only_returns_files_newest_first() {
+        let (dir, vault) = make_vault(&[
+            ("old.md", "# old\n"),
+            ("mid.md", "# mid\n"),
+            ("new.md", "# new\n"),
+        ]);
+        // Force distinct mtimes by writing in order with sleeps short
+        // enough to keep the test fast but long enough to register on
+        // filesystems with 1s resolution.
+        let now = std::time::SystemTime::now();
+        for (rel, offset_secs) in [("old.md", 0u64), ("mid.md", 5), ("new.md", 10)] {
+            let abs = vault.path.join(rel);
+            let mt = now + std::time::Duration::from_secs(offset_secs);
+            // Use filetime if available; otherwise just rewrite which
+            // bumps mtime to "now" — order then comes from write order.
+            std::fs::write(&abs, format!("# {rel}\n")).unwrap();
+            // Best-effort: pin mtime via stable std API.
+            if let Ok(f) = std::fs::OpenOptions::new().write(true).open(&abs) {
+                let _ = f.set_times(std::fs::FileTimes::new().set_modified(mt));
+            }
+        }
+
+        let recents = make_recents_for(&vault, &dir);
+        let hits = recent_hits(&vault, &recents, 25);
+        let names: Vec<String> = hits
+            .iter()
+            .map(|h| h.path.to_string_lossy().into_owned())
+            .collect();
+
+        // On unix we expect deterministic mtime order; on other
+        // platforms we at least assert the set is right.
+        assert_eq!(names.len(), 3);
+        let set: HashSet<&str> = names.iter().map(String::as_str).collect();
+        assert!(set.contains("new.md"));
+        assert!(set.contains("mid.md"));
+        assert!(set.contains("old.md"));
+        #[cfg(unix)]
+        assert_eq!(names, vec!["new.md", "mid.md", "old.md"]);
+
+        for h in &hits {
+            assert!(h.heading.is_none());
+            assert_eq!(h.file_score, 0);
+            assert_eq!(h.total_score, 0);
+        }
+    }
+
+    #[test]
+    fn recent_hits_opens_only_returns_log_order() {
+        let (dir, vault) = make_vault(&[("a.md", "# a\n"), ("b.md", "# b\n"), ("c.md", "# c\n")]);
+        let recents = make_recents_for(&vault, &dir);
+        recents.record_open(Path::new("a.md"));
+        recents.record_open(Path::new("c.md"));
+
+        let hits = recent_hits(&vault, &recents, 2);
+        let names: Vec<String> = hits
+            .iter()
+            .map(|h| h.path.to_string_lossy().into_owned())
+            .collect();
+        // c was opened most recently, so it's first; a follows.
+        assert_eq!(names, vec!["c.md", "a.md"]);
+    }
+
+    #[test]
+    fn recent_hits_merges_opens_first_then_mtime_tail() {
+        let (dir, vault) = make_vault(&[
+            ("a.md", "# a\n"),
+            ("b.md", "# b\n"),
+            ("c.md", "# c\n"),
+            ("d.md", "# d\n"),
+        ]);
+        let recents = make_recents_for(&vault, &dir);
+        // Open only a.md — it must appear first, regardless of mtime.
+        recents.record_open(Path::new("a.md"));
+
+        let hits = recent_hits(&vault, &recents, 25);
+        let names: Vec<String> = hits
+            .iter()
+            .map(|h| h.path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names[0], "a.md", "opened file leads the list");
+        assert_eq!(names.len(), 4, "all files appear");
+        // a.md must appear exactly once even though it could also match
+        // the mtime tail.
+        let a_count = names.iter().filter(|n| *n == "a.md").count();
+        assert_eq!(a_count, 1, "no duplication between opens and mtime tail");
+    }
+
+    #[test]
+    fn recent_hits_drops_deleted_paths_from_log() {
+        let (dir, vault) = make_vault(&[("alive.md", "# alive\n")]);
+        let recents = make_recents_for(&vault, &dir);
+        recents.record_open(Path::new("ghost.md"));
+        recents.record_open(Path::new("alive.md"));
+
+        let hits = recent_hits(&vault, &recents, 25);
+        let names: Vec<String> = hits
+            .iter()
+            .map(|h| h.path.to_string_lossy().into_owned())
+            .collect();
+        assert!(
+            !names.iter().any(|n| n == "ghost.md"),
+            "deleted file should not surface; got {names:?}"
+        );
+        assert!(names.iter().any(|n| n == "alive.md"));
+    }
+
+    #[test]
+    fn recent_hits_honors_limit() {
+        let (dir, vault) = make_vault(&[
+            ("a.md", "# a\n"),
+            ("b.md", "# b\n"),
+            ("c.md", "# c\n"),
+            ("d.md", "# d\n"),
+            ("e.md", "# e\n"),
+        ]);
+        let recents = make_recents_for(&vault, &dir);
+        recents.record_open(Path::new("a.md"));
+        recents.record_open(Path::new("b.md"));
+        let hits = recent_hits(&vault, &recents, 3);
+        assert_eq!(hits.len(), 3, "limit must be honored across the merge");
+
+        assert!(recent_hits(&vault, &recents, 0).is_empty());
+    }
+
+    #[test]
+    fn recent_hits_dedup_keeps_open_position() {
+        // Open a.md, then b.md. b.md is also mtime-fresh; opens-first
+        // must still place a (opened earlier) ahead of b? No — b was
+        // opened *later*, so it's first in load_recent (newest-first).
+        // The dedupe rule is: a path that appears in the opens slice
+        // doesn't reappear in the mtime tail.
+        let (dir, vault) = make_vault(&[("a.md", "# a\n"), ("b.md", "# b\n")]);
+        let recents = make_recents_for(&vault, &dir);
+        recents.record_open(Path::new("a.md"));
+        recents.record_open(Path::new("b.md"));
+
+        let hits = recent_hits(&vault, &recents, 10);
+        let names: Vec<String> = hits
+            .iter()
+            .map(|h| h.path.to_string_lossy().into_owned())
+            .collect();
+        assert_eq!(names, vec!["b.md", "a.md"]);
+    }
+
+    #[test]
+    fn recent_hits_empty_vault_empty_log_returns_empty() {
+        let dir = TempDir::new().unwrap();
+        let root = dir.path().join("vault");
+        fs::create_dir_all(root.join(".obsidian")).unwrap();
+        let vault = Vault::discover(Some(root)).unwrap();
+        let recents = make_recents_for(&vault, &dir);
+        assert!(recent_hits(&vault, &recents, 25).is_empty());
     }
 }

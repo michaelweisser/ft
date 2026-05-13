@@ -15,6 +15,7 @@ use ft_core::markdown::{extract_headings, Heading};
 use ft_core::notes::{
     move_sections, obsidian_url as core_obsidian_url, write_pair, Placement, SectionPick,
 };
+use ft_core::recents::RecentsLog;
 use ft_core::search::{fuzzy_find, Query, SearchOptions};
 use ft_core::vault::Vault;
 use regex::Regex;
@@ -92,6 +93,10 @@ fn run_open(args: OpenArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
 
     let abs_path = vault.path.join(&hit.path);
     let heading_line = hit.heading.as_ref().map(|h| h.line).unwrap_or(1);
+
+    // Record the open in the per-vault recents log so the next picker
+    // invocation (TUI or CLI) surfaces this note at the top. Best-effort.
+    RecentsLog::for_vault(&vault).record_open(&hit.path);
 
     if args.obsidian {
         // FT_OBSIDIAN_DRY_RUN=1 short-circuits the OS handoff and just

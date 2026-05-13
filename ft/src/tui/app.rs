@@ -12,6 +12,7 @@ use crossterm::{
     execute,
     terminal::{disable_raw_mode, enable_raw_mode, EnterAlternateScreen, LeaveAlternateScreen},
 };
+use ft_core::recents::RecentsLog;
 use ft_core::vault::Vault;
 use ratatui::Frame;
 
@@ -46,6 +47,10 @@ pub struct App {
     /// fuzzy picker held inside a popup) can clone a handle to the vault
     /// without colliding with App's own borrow of `tabs`.
     vault: Arc<Vault>,
+    /// Per-vault "recently opened" log (plan 008). Shared into every
+    /// `TabCtx` so picker sites surface recents and open chokepoints
+    /// record them.
+    recents: Arc<RecentsLog>,
     today: NaiveDate,
     tabs: Vec<Box<dyn Tab>>,
     active: usize,
@@ -59,18 +64,33 @@ pub struct App {
 
 impl App {
     pub fn new(vault: Arc<Vault>) -> Self {
+        let recents = Arc::new(RecentsLog::for_vault(&vault));
+        Self::new_with_recents(vault, recents)
+    }
+
+    /// Construct with an explicit recents log. Production goes through
+    /// [`Self::new`]; tests use this entry point to point the log at a
+    /// `TempDir`-rooted path so they don't write to the user's real
+    /// state directory.
+    pub fn new_with_recents(vault: Arc<Vault>, recents: Arc<RecentsLog>) -> Self {
         let today = resolve_today();
         let tabs: Vec<Box<dyn Tab>> = vec![
             Box::new(WelcomeTab::new()),
             Box::new(TasksTab::new()),
             Box::new(NotesTab::new()),
         ];
-        Self::with_tabs(vault, today, tabs)
+        Self::with_tabs(vault, recents, today, tabs)
     }
 
-    fn with_tabs(vault: Arc<Vault>, today: NaiveDate, tabs: Vec<Box<dyn Tab>>) -> Self {
+    fn with_tabs(
+        vault: Arc<Vault>,
+        recents: Arc<RecentsLog>,
+        today: NaiveDate,
+        tabs: Vec<Box<dyn Tab>>,
+    ) -> Self {
         Self {
             vault,
+            recents,
             today,
             tabs,
             active: 0,
@@ -89,6 +109,7 @@ impl App {
         {
             let mut ctx = TabCtx {
                 vault: &self.vault,
+                recents: &self.recents,
                 today: self.today,
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
@@ -127,6 +148,7 @@ impl App {
 
         let ctx = TabCtx {
             vault: &self.vault,
+            recents: &self.recents,
             today: self.today,
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
@@ -178,6 +200,7 @@ impl App {
         let outcome = {
             let mut ctx = TabCtx {
                 vault: &self.vault,
+                recents: &self.recents,
                 today: self.today,
                 last_refresh: &self.last_refresh,
                 pending_request: &self.pending_request,
@@ -240,6 +263,7 @@ impl App {
         }
         let mut ctx = TabCtx {
             vault: &self.vault,
+            recents: &self.recents,
             today: self.today,
             last_refresh: &self.last_refresh,
             pending_request: &self.pending_request,
@@ -273,6 +297,7 @@ impl App {
                 {
                     let mut ctx = TabCtx {
                         vault: &self.vault,
+                        recents: &self.recents,
                         today: self.today,
                         last_refresh: &self.last_refresh,
                         pending_request: &self.pending_request,
@@ -387,8 +412,13 @@ impl App {
     /// existing test sites stay unchanged after the production refactor;
     /// the wrap-in-`Arc` happens here so production and test go through
     /// the same internal shape.
+    ///
+    /// Routes the recents log under `vault.path/.ft-state/` so test runs
+    /// never touch the user's real `$XDG_STATE_HOME`. Since `vault.path`
+    /// is itself a `TempDir` in tests, the log is cleaned up on drop.
     pub fn for_test(vault: Vault) -> Self {
-        Self::new(Arc::new(vault))
+        let recents = Self::test_recents_for(&vault);
+        Self::new_with_recents(Arc::new(vault), recents)
     }
 
     /// Like [`for_test`], but injects a fixed clock and derives `today` from
@@ -400,7 +430,38 @@ impl App {
             Box::new(TasksTab::with_clock(clock)),
             Box::new(NotesTab::new()),
         ];
-        Self::with_tabs(Arc::new(vault), today, tabs)
+        let recents = Self::test_recents_for(&vault);
+        Self::with_tabs(Arc::new(vault), recents, today, tabs)
+    }
+
+    /// Variant of [`for_test`] that lets the caller inspect / pre-seed the
+    /// recents log via a shared `Arc`. Used by recents-aware behavior
+    /// tests that need to assert on log writes.
+    pub fn for_test_with_recents(vault: Vault, recents: Arc<RecentsLog>) -> Self {
+        Self::new_with_recents(Arc::new(vault), recents)
+    }
+
+    /// Like [`for_test_with_clock`] but also takes an explicit recents
+    /// log so the test can pre-seed open history. Used by the
+    /// recents-snapshot test which needs both a fixed clock (for stable
+    /// status-bar timestamps) and a pre-populated log.
+    pub fn for_test_with_clock_and_recents(
+        vault: Vault,
+        clock: ClockFn,
+        recents: Arc<RecentsLog>,
+    ) -> Self {
+        let today = clock().date_naive();
+        let tabs: Vec<Box<dyn Tab>> = vec![
+            Box::new(WelcomeTab::new()),
+            Box::new(TasksTab::with_clock(clock)),
+            Box::new(NotesTab::new()),
+        ];
+        Self::with_tabs(Arc::new(vault), recents, today, tabs)
+    }
+
+    fn test_recents_for(vault: &Vault) -> Arc<RecentsLog> {
+        let log_path = vault.path.join(".ft-state").join("recents.jsonl");
+        Arc::new(RecentsLog::with_log_path(vault.path.clone(), log_path))
     }
 
     pub fn render_to(&mut self, frame: &mut Frame) {

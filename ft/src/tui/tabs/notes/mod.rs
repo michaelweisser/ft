@@ -180,7 +180,10 @@ impl NotesTab {
     }
 
     fn new_vault_picker(ctx: &TabCtx) -> FuzzyPicker<VaultFilePickerSource> {
-        FuzzyPicker::new(VaultFilePickerSource::new(Arc::clone(ctx.vault)))
+        FuzzyPicker::new(VaultFilePickerSource::new(
+            Arc::clone(ctx.vault),
+            Arc::clone(ctx.recents),
+        ))
     }
 
     fn handle_idle_key(&mut self, k: KeyEvent, ctx: &TabCtx) -> EventOutcome {
@@ -1079,6 +1082,10 @@ fn build_clipboard(
 fn request_open_in_editor(ctx: &TabCtx, hit: &Hit) {
     let abs = ctx.vault.path.join(&hit.path);
     let line = hit.heading.as_ref().map(|h| h.line).unwrap_or(1);
+    // Record the open before raising the AppRequest so a subsequent
+    // picker invocation surfaces this note at the top of recents.
+    // `record_open` is best-effort and never errors.
+    ctx.recents.record_open(&hit.path);
     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInEditor { path: abs, line });
 }
 
@@ -1090,5 +1097,6 @@ fn request_open_in_obsidian(ctx: &TabCtx, hit: &Hit) {
         .map(|n| n.to_string_lossy().into_owned())
         .unwrap_or_else(|| "vault".to_string());
     let url = ft_core::notes::obsidian_url(&vault_name, &hit.path, hit.heading.as_ref());
+    ctx.recents.record_open(&hit.path);
     *ctx.pending_request.borrow_mut() = Some(AppRequest::OpenInObsidian { url });
 }
