@@ -20,7 +20,7 @@ ft/
 │   │   ├── git.rs              # `ft git sync`
 │   │   ├── completions.rs      # `ft completions <shell>`
 │   │   └── man.rs              # `ft man [--out DIR]`
-│   ├── src/output/             # table.rs, json.rs, markdown.rs, ndjson.rs
+│   ├── src/output/             # table.rs, json.rs, markdown.rs, ndjson.rs, links.rs
 │   └── tests/                  # integration tests with assert_cmd
 └── ft-core/                    # library crate (the brain)
     ├── Cargo.toml
@@ -30,6 +30,12 @@ ft/
         ├── config.rs           # layered config (user + vault)
         ├── periodic.rs         # periodic-note path + template resolution
         ├── git.rs              # discover_repo + status + upstream + sync
+        ├── graph/
+        │   ├── mod.rs          # Graph + NodeKind/EdgeKind/NoteId/LinkEdge
+        │   ├── parser.rs       # extract_links: wikilinks, md links, embeds
+        │   ├── resolve.rs      # Obsidian shortest-path resolution rules
+        │   └── rename.rs       # plan_rename / apply_rename_plan
+        ├── markdown.rs         # heading extractor + shared LineSkipState
         ├── dates.rs            # ISO / keyword / relative / NL parsing
         ├── fs.rs               # write_atomic
         ├── selector.rs         # id / file:line / fuzzy

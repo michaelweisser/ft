@@ -3,6 +3,7 @@ pub mod dates;
 pub mod error;
 pub mod fs;
 pub mod git;
+pub mod graph;
 pub mod markdown;
 pub mod notes;
 pub mod periodic;

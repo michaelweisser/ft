@@ -1,4 +1,5 @@
 pub mod json;
+pub mod links;
 pub mod markdown;
 pub mod ndjson;
 pub mod table;

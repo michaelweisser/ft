@@ -21,6 +21,7 @@ nucleo-matcher = { workspace = true }
 regex = { workspace = true }
 urlencoding = { workspace = true }
 minijinja = { workspace = true }
+petgraph = { workspace = true }
 
 [dev-dependencies]
 assert_fs = { workspace = true }

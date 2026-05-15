@@ -78,6 +78,56 @@ ft tasks move stale-id --to inbox/triage.md
 ft tasks move --query 'tag is legacy' --to inbox/triage.md#Triage --dry-run
 ```
 
+## Note links
+
+`ft notes backlinks <note>` lists every other note that links *to* the
+target; `ft notes links <note>` lists every link going *out* of the
+target (including `[[Unresolved]]` ghost targets). `<note>` accepts a
+vault-relative path, a bare title, or a fuzzy query (in that order),
+matching the ergonomics of `ft notes open`.
+
+```sh
+ft notes backlinks finance              # who links to Areas/finance.md?
+ft notes backlinks Areas/finance.md     # explicit path also works
+ft notes links Journal/2026-05-15.md    # what does today's note link to?
+ft notes links hub --format ndjson      # script-friendly output
+```
+
+The link graph (`ft_core::graph`) is built from a parallel scan of
+every markdown file in the vault, recognising wikilinks (`[[Foo]]`,
+`[[Foo|alias]]`, `[[Foo#anchor]]`), markdown links (`[Foo](foo.md)`),
+and embeds (`![[Foo]]`, `![alt](image.png)`). Resolution follows
+Obsidian's defaults — for collisions, the shortest path wins, with
+alphabetical tiebreak. Unresolved targets become "ghost" nodes that
+backlinks queries can still find.
+
+The four `--format` values (`table` / `json` / `ndjson` / `markdown`)
+are the same as `ft tasks list`. `--allow-empty` is honored — pass it
+in scripts that don't want a 1 exit on a no-link query.
+
+`ft notes rename <note> <new-name-or-path>` moves a note and rewrites
+every link in the vault to point at the new name. Bare new name keeps
+the same directory; a path with `/` is vault-relative. `.md` is
+appended automatically. Wikilink display aliases (`[[foo|My Foo]]`)
+and heading anchors (`[[foo#H]]`) survive the rewrite verbatim;
+markdown links re-render with the URL-encoded path relative to each
+linker's directory; embeds keep their `!` prefix.
+
+```sh
+ft notes rename foo bar                 # foo.md → bar.md, link rewrites
+ft notes rename notes/foo notes/bar     # explicit vault-relative path
+ft notes rename foo archive/foo         # move across directories
+ft notes rename "[[Phantom]]" Real      # rewrite linkers; no file created
+ft notes rename foo bar --dry-run       # print plan, write nothing
+```
+
+A freshness guard (`(mtime, len)` per touched file at plan time)
+catches the "user edited a file in another tool between plan and
+apply" case and aborts before any write. The applier sorts same-file
+edits by descending byte offset so multi-link rewrites in one file
+are byte-safe; the file rename happens last so a self-linking note
+stays correct.
+
 ## Git sync
 
 `ft git sync` commits any working-tree changes in the vault repo,

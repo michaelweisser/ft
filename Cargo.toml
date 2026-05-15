@@ -25,6 +25,7 @@ nucleo-matcher = "0.3"
 regex = "1"
 urlencoding = "2"
 minijinja = { version = "2", default-features = false, features = ["builtins", "serde"] }
+petgraph = { version = "0.6", default-features = false, features = ["stable_graph"] }
 
 # Binary
 clap = { version = "4", features = ["derive", "wrap_help"] }

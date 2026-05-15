@@ -26,17 +26,32 @@ pub struct Heading {
 /// scope — they're rare in modern Obsidian vaults.
 pub fn extract_headings(content: &str) -> Vec<Heading> {
     let mut out = Vec::new();
-    let mut state = ScanState::default();
+    let mut state = LineSkipState::new();
 
     for (idx, line) in content.lines().enumerate() {
         let lineno = idx + 1;
-        state.advance(line, lineno, &mut out);
+        if state.skip_line(line) {
+            continue;
+        }
+        if let Some(h) = parse_atx(line, lineno) {
+            out.push(h);
+        }
     }
     out
 }
 
+/// Tracks frontmatter / fenced code block / indented code block state
+/// across a line-by-line scan of a markdown file. Both the heading
+/// extractor (above) and the link parser (`crate::graph::parser`) use
+/// this so the "what counts as content vs. structure" rules stay in
+/// one place.
+///
+/// Inline code spans (single/double/triple backticks within a line)
+/// are *not* handled here — they're a within-line concern that each
+/// consumer handles with its own intra-line scanner. This struct only
+/// answers the per-line question "should I skip this whole line?"
 #[derive(Debug, Default)]
-struct ScanState {
+pub(crate) struct LineSkipState {
     /// Are we still inside the leading frontmatter block? Set on the
     /// first line if it's `---`; cleared when we hit the closing `---`.
     in_frontmatter: bool,
@@ -51,8 +66,17 @@ struct ScanState {
     fence_len: usize,
 }
 
-impl ScanState {
-    fn advance(&mut self, line: &str, lineno: usize, out: &mut Vec<Heading>) {
+impl LineSkipState {
+    pub(crate) fn new() -> Self {
+        Self::default()
+    }
+
+    /// Advance one line. Returns `true` when this line is structural
+    /// (frontmatter delimiter, frontmatter body, code-fence delimiter,
+    /// inside a fenced code block, or an indented code block) and
+    /// should be skipped by the consumer; `false` when this line
+    /// carries content the consumer should examine.
+    pub(crate) fn skip_line(&mut self, line: &str) -> bool {
         // Frontmatter handling: only relevant on line 1 and during the
         // block. CommonMark doesn't define frontmatter; we follow the
         // Obsidian / Jekyll convention of a `---` block at the very top.
@@ -60,13 +84,13 @@ impl ScanState {
             self.started = true;
             if line.trim_end() == "---" {
                 self.in_frontmatter = true;
-                return;
+                return true;
             }
         } else if self.in_frontmatter {
             if line.trim_end() == "---" || line.trim_end() == "..." {
                 self.in_frontmatter = false;
             }
-            return;
+            return true;
         }
 
         // Fenced code blocks: opening fence pattern is N≥3 of `'`'` or
@@ -82,12 +106,12 @@ impl ScanState {
                     self.fence_len = 0;
                 }
             }
-            return;
+            return true;
         }
         if let Some((c, n)) = leading_fence(trimmed) {
             self.fence = Some(c);
             self.fence_len = n;
-            return;
+            return true;
         }
 
         // Indented code block: 4+ leading spaces (or a tab) and we're
@@ -96,20 +120,17 @@ impl ScanState {
         // positives on deeply-nested list items are accepted in v1;
         // they would never start with `#` to begin with.
         if starts_with_indent(line, 4) {
-            return;
+            return true;
         }
 
-        // ATX heading: 1-6 `#` followed by a space and text.
-        if let Some(h) = parse_atx(line, lineno) {
-            out.push(h);
-        }
+        false
     }
 }
 
 /// Detect a fenced code block opener / closer at the start of `s`. Returns
 /// the fence char (`'`'` or `'~'`) and the number of consecutive fence
 /// chars when 3 or more are present, otherwise `None`.
-fn leading_fence(s: &str) -> Option<(char, usize)> {
+pub(crate) fn leading_fence(s: &str) -> Option<(char, usize)> {
     let first = s.chars().next()?;
     if first != '`' && first != '~' {
         return None;

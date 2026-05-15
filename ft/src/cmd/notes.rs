@@ -14,6 +14,8 @@ use anyhow::{anyhow, Context, Result};
 use chrono::{NaiveDate, NaiveDateTime};
 use clap::{Args, Subcommand, ValueEnum};
 use ft_core::fs::write_atomic;
+use ft_core::graph::rename::{apply_rename_plan, plan_rename, RenamePlan};
+use ft_core::graph::{Graph, NodeKind, NoteId};
 use ft_core::markdown::{extract_headings, Heading};
 use ft_core::notes::template::{render as render_template, TemplateContext};
 use ft_core::notes::{
@@ -24,6 +26,13 @@ use ft_core::recents::RecentsLog;
 use ft_core::search::{fuzzy_find, Query, SearchOptions};
 use ft_core::vault::Vault;
 use regex::Regex;
+
+use crate::output::links::{
+    render_json as render_links_json, render_markdown as render_links_markdown,
+    render_ndjson as render_links_ndjson, render_table as render_links_table, Direction, LinkRow,
+    TableOpts as LinkTableOpts,
+};
+use crate::output::Format;
 
 #[derive(Args)]
 pub struct NotesArgs {
@@ -45,6 +54,14 @@ pub enum NotesCommand {
     /// Open a periodic note (daily/weekly/monthly/quarterly/yearly),
     /// creating it from the configured template if missing.
     Periodic(PeriodicArgs),
+    /// List notes that link **to** the given note (incoming edges).
+    Backlinks(LinksArgs),
+    /// List notes the given note links **to** (outgoing edges,
+    /// including unresolved targets).
+    Links(LinksArgs),
+    /// Rename a note (or unresolved `[[Phantom]]` target) and rewrite
+    /// every link in the vault to point at the new name.
+    Rename(RenameArgs),
 }
 
 pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
@@ -54,6 +71,9 @@ pub fn run(args: NotesArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
         NotesCommand::Create(c) => run_create(c, vault_flag),
         NotesCommand::Today(t) => run_today(t, vault_flag),
         NotesCommand::Periodic(p) => run_periodic(p, vault_flag),
+        NotesCommand::Backlinks(a) => run_links(a, vault_flag, Direction::Backlinks),
+        NotesCommand::Links(a) => run_links(a, vault_flag, Direction::Forward),
+        NotesCommand::Rename(a) => run_rename(a, vault_flag),
     }
 }
 
@@ -977,6 +997,333 @@ fn run_periodic_inner(
     }
 
     Ok(ExitCode::SUCCESS)
+}
+
+// ── ft notes backlinks / links ───────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct LinksArgs {
+    /// Note to query. Vault-relative path (e.g. `Areas/finance.md`),
+    /// bare title (e.g. `finance` — falls back to fuzzy search), or
+    /// fuzzy query when nothing exact matches.
+    #[arg(value_name = "NOTE", required = true)]
+    pub note: Vec<String>,
+
+    /// Output format.
+    #[arg(long, value_enum, default_value_t = Format::Table)]
+    pub format: Format,
+
+    /// Disable colored output (also honored: `NO_COLOR` env var).
+    #[arg(long)]
+    pub no_color: bool,
+
+    /// Treat an empty result set as a successful run. Default: exit 1
+    /// when there are no edges to show.
+    #[arg(long)]
+    pub allow_empty: bool,
+}
+
+fn run_links(args: LinksArgs, vault_flag: Option<PathBuf>, dir: Direction) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let graph = Graph::build(&vault).context("building note graph")?;
+
+    let query = args.note.join(" ");
+    let id = resolve_note_query(&graph, &vault, &query)?;
+    let queried_path = match graph.node(id) {
+        NodeKind::Note(n) => n.path.clone(),
+        // resolve_note_query never returns a ghost id from CLI input.
+        NodeKind::Ghost(_) => unreachable!("ghost nodes are not selectable from the CLI yet"),
+    };
+
+    let rows: Vec<LinkRow> = match dir {
+        Direction::Backlinks => {
+            let mut rows: Vec<LinkRow> = graph
+                .incoming(id)
+                .map(|(src, edge)| LinkRow::from_incoming(&graph, src, &queried_path, edge))
+                .collect();
+            // Stable order: linker path, then line.
+            rows.sort_by(|a, b| a.src.cmp(&b.src).then_with(|| a.src_line.cmp(&b.src_line)));
+            rows
+        }
+        Direction::Forward => {
+            let mut rows: Vec<LinkRow> = graph
+                .outgoing(id)
+                .map(|(dst, edge)| LinkRow::from_outgoing(&graph, &queried_path, dst, edge))
+                .collect();
+            // Outgoing edges are already in document order; sort by
+            // (line, raw) for determinism in the face of multiple links
+            // on the same line.
+            rows.sort_by(|a, b| a.src_line.cmp(&b.src_line).then_with(|| a.raw.cmp(&b.raw)));
+            rows
+        }
+    };
+
+    let exit = if rows.is_empty() && !args.allow_empty {
+        ExitCode::from(1)
+    } else {
+        ExitCode::SUCCESS
+    };
+
+    match args.format {
+        Format::Table => {
+            let use_color = !args.no_color
+                && std::env::var_os("NO_COLOR").is_none()
+                && io::stdout().is_terminal();
+            let opts = LinkTableOpts {
+                use_color,
+                direction: dir,
+            };
+            if rows.is_empty() {
+                let msg = match dir {
+                    Direction::Backlinks => "no backlinks",
+                    Direction::Forward => "no outgoing links",
+                };
+                println!("{msg}");
+            } else {
+                let out = render_links_table(&rows, opts);
+                println!("{out}");
+            }
+        }
+        Format::Json => render_links_json(&rows)?,
+        Format::Ndjson => render_links_ndjson(&rows)?,
+        Format::Markdown => print!("{}", render_links_markdown(&rows)),
+    }
+
+    Ok(exit)
+}
+
+/// Resolve a `<note>` argument to a [`NoteId`] in the graph.
+///
+/// Order of attempts:
+/// 1. **Exact vault-relative path** (with `.md` auto-appended if missing).
+/// 2. **Title** lookup via the graph's `title_index`. When multiple
+///    titles match, this defers to the parser/resolver tiebreak — i.e.
+///    pick the shortest path; the message lists all candidates if you
+///    want to disambiguate by passing the path directly.
+/// 3. **Fuzzy** match via `fuzzy_find` against the vault, taking the
+///    top hit (matches `ft notes open`'s ergonomics).
+fn resolve_note_query(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {
+    let trimmed = query.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!(
+            "<note> is empty — pass a path, title, or fuzzy query"
+        ));
+    }
+
+    // 1. Exact path with optional `.md`.
+    let with_md = if std::path::Path::new(trimmed)
+        .extension()
+        .is_some_and(|e| e == "md")
+    {
+        PathBuf::from(trimmed)
+    } else {
+        PathBuf::from(format!("{trimmed}.md"))
+    };
+    if let Some(id) = graph
+        .note_by_path(std::path::Path::new(trimmed))
+        .or_else(|| graph.note_by_path(&with_md))
+    {
+        return Ok(id);
+    }
+
+    // 2. Title (filename stem) — pick the shortest path on collision.
+    // Strip `.md` for the title lookup so `foo.md` and `foo` both work.
+    let title = std::path::Path::new(trimmed)
+        .file_stem()
+        .map(|s| s.to_string_lossy().into_owned())
+        .unwrap_or_else(|| trimmed.to_string());
+    let candidates = graph.note_by_title(&title);
+    if let Some(&id) = candidates.first() {
+        // If the user passed an unambiguous title, pick directly. With
+        // multiple, take the shortest path / alphabetical winner per
+        // the Obsidian convention — same code path as wikilink resolution.
+        if candidates.len() == 1 {
+            return Ok(id);
+        }
+        let best = candidates
+            .iter()
+            .min_by(|&&a, &&b| {
+                let pa = match graph.node(a) {
+                    NodeKind::Note(n) => n.path.clone(),
+                    _ => PathBuf::new(),
+                };
+                let pb = match graph.node(b) {
+                    NodeKind::Note(n) => n.path.clone(),
+                    _ => PathBuf::new(),
+                };
+                pa.components()
+                    .count()
+                    .cmp(&pb.components().count())
+                    .then_with(|| pa.cmp(&pb))
+            })
+            .copied()
+            .unwrap();
+        return Ok(best);
+    }
+
+    // 3. Fuzzy fallback.
+    let q = Query::parse(trimmed);
+    if !q.is_empty() {
+        let opts = SearchOptions {
+            limit: 1,
+            include_headings: false,
+        };
+        if let Some(hit) = fuzzy_find(vault, &q, opts).into_iter().next() {
+            if let Some(id) = graph.note_by_path(&hit.path) {
+                return Ok(id);
+            }
+        }
+    }
+
+    Err(anyhow!(
+        "no note found for `{trimmed}` (tried path, title, and fuzzy match)"
+    ))
+}
+
+// ── ft notes rename ──────────────────────────────────────────────────────────
+
+#[derive(Args, Debug)]
+pub struct RenameArgs {
+    /// Note to rename. Vault-relative path (e.g. `Areas/finance.md`),
+    /// bare title (`finance`), fuzzy query, or — for an unresolved
+    /// link target — the explicit `[[Phantom]]` form.
+    #[arg(value_name = "NOTE", required = true)]
+    pub note: String,
+
+    /// New name or path. `mv` ergonomics:
+    ///
+    /// - bare name (no `/`): keep the same directory, swap the stem.
+    /// - path with `/`: vault-relative full target path.
+    ///
+    /// `.md` is appended automatically when missing.
+    #[arg(value_name = "NEW", required = true)]
+    pub new: String,
+
+    /// Print the plan and exit without writing anything.
+    #[arg(long)]
+    pub dry_run: bool,
+}
+
+fn run_rename(args: RenameArgs, vault_flag: Option<PathBuf>) -> Result<ExitCode> {
+    let vault = Vault::discover(vault_flag).context("could not locate an Obsidian vault")?;
+    let graph = Graph::build(&vault).context("building note graph")?;
+
+    let id = resolve_rename_source(&graph, &vault, &args.note)?;
+
+    // Determine the source's current directory for `mv`-style ergonomics.
+    let source_rel: Option<PathBuf> = match graph.node(id) {
+        NodeKind::Note(n) => Some(n.path.clone()),
+        NodeKind::Ghost(_) => None,
+    };
+
+    let new_path = parse_new_path(&args.new, source_rel.as_deref())?;
+
+    let plan = plan_rename(&graph, &vault.path, id, &new_path).map_err(|e| anyhow!("{e}"))?;
+
+    if args.dry_run {
+        print_rename_plan_summary(&plan, source_rel.as_deref(), &new_path);
+        return Ok(ExitCode::SUCCESS);
+    }
+
+    apply_rename_plan(&vault.path, &plan).map_err(|e| anyhow!("{e}"))?;
+
+    let edit_files = plan
+        .edits
+        .iter()
+        .map(|e| e.path.as_path())
+        .collect::<std::collections::BTreeSet<_>>()
+        .len();
+    let edit_count = plan.edits.len();
+    match (&plan.rename, source_rel.as_deref()) {
+        (Some(r), _) => println!(
+            "renamed {} → {}, updated {} link(s) in {} file(s)",
+            r.from.display(),
+            r.to.display(),
+            edit_count,
+            edit_files
+        ),
+        (None, _) => println!(
+            "rewrote {} ghost link(s) in {} file(s) — pass `ft notes create {}` to create the new file",
+            edit_count,
+            edit_files,
+            new_path.display()
+        ),
+    }
+    Ok(ExitCode::SUCCESS)
+}
+
+/// Resolve `<note>` for rename. Same precedence as `resolve_note_query`
+/// (path → title → fuzzy), with one extra path: a literal `[[Phantom]]`
+/// form selects the matching ghost node by its raw target string.
+fn resolve_rename_source(graph: &Graph, vault: &Vault, query: &str) -> Result<NoteId> {
+    let trimmed = query.trim();
+    if let Some(stripped) = trimmed
+        .strip_prefix("[[")
+        .and_then(|s| s.strip_suffix("]]"))
+    {
+        let raw = stripped.trim();
+        if raw.is_empty() {
+            return Err(anyhow!("[[ ]] selector is empty"));
+        }
+        return graph
+            .ghost_by_raw(raw)
+            .ok_or_else(|| anyhow!("no ghost node found for `{raw}` (is anyone linking to it?)"));
+    }
+    resolve_note_query(graph, vault, trimmed)
+}
+
+/// Translate the user's `<new>` arg into a vault-relative target path.
+/// Rules: bare name (no `/`) inherits `source_rel`'s directory; path
+/// with `/` is vault-relative; `.md` is appended when missing.
+fn parse_new_path(raw: &str, source_rel: Option<&Path>) -> Result<PathBuf> {
+    let trimmed = raw.trim();
+    if trimmed.is_empty() {
+        return Err(anyhow!("<new> is empty"));
+    }
+    let with_md = if std::path::Path::new(trimmed)
+        .extension()
+        .is_some_and(|e| e == "md")
+    {
+        PathBuf::from(trimmed)
+    } else {
+        PathBuf::from(format!("{trimmed}.md"))
+    };
+    let has_slash = trimmed.contains('/');
+    if has_slash {
+        Ok(with_md)
+    } else if let Some(src) = source_rel {
+        let dir = src.parent().unwrap_or_else(|| Path::new(""));
+        Ok(dir.join(with_md))
+    } else {
+        // Ghost rename, bare name → vault root.
+        Ok(with_md)
+    }
+}
+
+fn print_rename_plan_summary(plan: &RenamePlan, source_rel: Option<&Path>, new_path: &Path) {
+    match (&plan.rename, source_rel) {
+        (Some(r), _) => println!("would rename: {} → {}", r.from.display(), r.to.display()),
+        (None, _) => println!(
+            "would rewrite ghost links to point at: {}",
+            new_path.display()
+        ),
+    }
+    let mut by_file: std::collections::BTreeMap<&Path, usize> = std::collections::BTreeMap::new();
+    for edit in &plan.edits {
+        *by_file.entry(edit.path.as_path()).or_default() += 1;
+    }
+    if by_file.is_empty() {
+        println!("no link rewrites needed");
+    } else {
+        println!(
+            "would update {} link(s) in {} file(s):",
+            plan.edits.len(),
+            by_file.len()
+        );
+        for (path, n) in by_file {
+            println!("  {} ({n} edit(s))", path.display());
+        }
+    }
 }
 
 // ── tests ────────────────────────────────────────────────────────────────────
