@@ -473,6 +473,60 @@ fn timeblocks_tab_close_brace_shifts_start_by_5m() -> Result<()> {
 }
 
 #[test]
+fn timeblocks_tab_gt_shifts_block_5m_later_preserving_duration() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('>'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 09:05 - 10:05 a"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_lt_shifts_block_5m_earlier_preserving_duration() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(key('<'))?;
+    app.service_pending_for_test()?;
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    assert!(body.contains("- 08:55 - 09:55 a"), "got: {body}");
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_gt_keeps_cursor_on_shifted_block_after_resort() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 09:30 first\n- 09:10 - 09:40 second\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Select "first" (idx 0) and push it +15m → 09:15 - 09:45. Now
+    // second (09:10) comes first; cursor should follow "first" to idx 1.
+    for _ in 0..3 {
+        app.dispatch(key('>'))?;
+        app.service_pending_for_test()?;
+    }
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame
+            .lines()
+            .any(|l| l.contains("▶") && l.contains("first")),
+        "cursor should follow `first` after re-sort: {frame}"
+    );
+    Ok(())
+}
+
+#[test]
 fn timeblocks_tab_open_brace_pulls_start_5m_earlier() -> Result<()> {
     let (_dir, vault) = timeblocks_vault();
     seed_day(&vault, "2026-05-10", "## Time Blocks\n- 09:00 - 10:00 a\n");

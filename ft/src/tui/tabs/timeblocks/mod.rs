@@ -9,6 +9,12 @@
 //! for the App's global tab-cycle, so we deliberately don't shadow them
 //! here — see plan 015 session 4 outcome for the rationale.)
 //!
+//! Time-adjustment chords on the focused block (5-minute steps):
+//! - `]` / `[` — grow / shrink end
+//! - `}` / `{` — push / pull start
+//! - `>` / `<` — shift the whole block later / earlier (start + end
+//!   move together, duration preserved).
+//!
 //! Mutations land in session 5 — this session is read-only, so the tab
 //! never writes to disk.
 
@@ -388,6 +394,47 @@ impl TimeblocksTab {
 
     fn shift_start(&mut self, ctx: &mut TabCtx, m: i32) {
         self.shift_block_time(ctx, m, false);
+    }
+
+    /// Shift both start and end by the same delta, moving the whole
+    /// block earlier or later in time without changing its duration.
+    /// Bound by the same `[00:00, 23:59]` clamps the library applies to
+    /// each endpoint independently — pushing a block past the 23:59
+    /// ceiling collapses end onto start and trips the library's
+    /// `end > start` validation, surfaced as an error toast.
+    fn shift_block(&mut self, ctx: &mut TabCtx, shift_minutes: i32) {
+        let pane = self.focus;
+        let Some(idx) = self.selected_block_idx(pane) else {
+            return;
+        };
+        let Some(path) = self.pane_path(pane) else {
+            queue_toast(ctx, "no daily-note path resolved", ToastStyle::Error);
+            return;
+        };
+        let p = match pane {
+            Pane::Today => &self.today,
+            Pane::Tomorrow => &self.tomorrow,
+        };
+        let block = &p.blocks[idx];
+        let old_start = block.start;
+        let source_line = block.source_line;
+        let mutation = EditMutation {
+            start: Some(TimeChange::ShiftMinutes(shift_minutes)),
+            end: Some(TimeChange::ShiftMinutes(shift_minutes)),
+            ..Default::default()
+        };
+        let selector = Selector::Line(source_line);
+        match ops::edit_block(&path, &self.heading, &selector, mutation) {
+            Ok(_) => {
+                self.reload(ctx);
+                // Both endpoints moved by the same delta — the block
+                // may re-sort relative to neighbours, so anchor by the
+                // new start to keep the cursor on it.
+                let new_start = shift_clamped(old_start, shift_minutes);
+                self.select_by_start(pane, new_start);
+            }
+            Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
+        }
     }
 
     /// `c` chord — when the focused pane's daily note doesn't yet exist,
@@ -995,6 +1042,14 @@ impl Tab for TimeblocksTab {
                 }
                 KeyCode::Char('{') => {
                     self.shift_start(ctx, -5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('>') => {
+                    self.shift_block(ctx, 5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('<') => {
+                    self.shift_block(ctx, -5);
                     return Ok(EventOutcome::Consumed);
                 }
                 _ => {}
