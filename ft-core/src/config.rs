@@ -45,6 +45,27 @@ pub struct Config {
     /// Git-sync settings. See [`Git`].
     #[serde(default)]
     pub git: Git,
+    /// Timeblocks settings. See [`Timeblocks`].
+    #[serde(default)]
+    pub timeblocks: Timeblocks,
+}
+
+impl Config {
+    /// Heading under which timeblock entries live in each daily note.
+    /// Defaults to `"Time Blocks"` when [`Timeblocks::heading`] is unset.
+    pub fn timeblocks_heading(&self) -> &str {
+        self.timeblocks.heading.as_deref().unwrap_or("Time Blocks")
+    }
+}
+
+/// `ft timeblocks` configuration. The daily-note path is resolved via the
+/// existing [`PeriodicNotes::daily`] block; this struct just controls the
+/// section heading the timeblock list is stored under.
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub struct Timeblocks {
+    /// Heading under which timeblocks live. Defaults to `"Time Blocks"`.
+    pub heading: Option<String>,
 }
 
 /// `ft git sync` / TUI `g s` configuration. Currently just the pull
@@ -635,6 +656,53 @@ popup_height = "50%"
     }
 
     // ── [editor] block (plan 011 session 1) — continued ──────────────────
+
+    // ── [timeblocks] block (plan 015 session 1) ──────────────────────────
+
+    #[test]
+    fn timeblocks_default_heading_is_time_blocks() {
+        let tmp = TempDir::new().unwrap();
+        let lc = load(
+            &tmp.path().join("no-user.toml"),
+            &tmp.path().join("no-vault.toml"),
+        )
+        .unwrap();
+        assert!(lc.config.timeblocks.heading.is_none());
+        assert_eq!(lc.config.timeblocks_heading(), "Time Blocks");
+    }
+
+    #[test]
+    fn timeblocks_heading_override_applies() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[timeblocks]
+heading = "Day Planner"
+"#,
+            )
+            .unwrap();
+        let lc = load(&tmp.path().join("no-user.toml"), vault.path()).unwrap();
+        assert_eq!(lc.config.timeblocks_heading(), "Day Planner");
+    }
+
+    #[test]
+    fn timeblocks_unknown_field_rejected() {
+        let tmp = TempDir::new().unwrap();
+        let vault = tmp.child("vault.toml");
+        vault
+            .write_str(
+                r#"
+[timeblocks]
+heading = "Time Blocks"
+typo_field = "oops"
+"#,
+            )
+            .unwrap();
+        let r = load(&tmp.path().join("no-user.toml"), vault.path());
+        assert!(r.is_err(), "deny_unknown_fields should reject typos");
+    }
 
     #[test]
     fn editor_strategy_resolve_treats_empty_tmux_as_unset() {

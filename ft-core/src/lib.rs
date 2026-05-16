@@ -12,4 +12,5 @@ pub mod recents;
 pub mod search;
 pub mod selector;
 pub mod task;
+pub mod timeblock;
 pub mod vault;

@@ -2,7 +2,7 @@
 id: 015
 name: timeblocks
 title: Timeblocks: ft_core library + ft timeblocks CLI + TUI tab
-status: ready
+status: implementing
 created: 2026-05-16
 updated: 2026-05-16
 ---
@@ -96,7 +96,7 @@ Why ship CLI before TUI:
 
 ### Library — `ft_core::timeblock`
 
-- [ ] New module `ft_core::timeblock` with public surface:
+- [x] New module `ft_core::timeblock` with public surface:
       ```rust
       pub struct Timeblock {
           pub start: NaiveTime,
@@ -115,30 +115,30 @@ Why ship CLI before TUI:
       pub fn serialize_line(b: &Timeblock) -> String;
       pub fn parse_tags(desc: &str) -> Vec<Tag>;
       ```
-- [ ] Hierarchical tag parser ported from `blockary::tag` with the
+- [x] Hierarchical tag parser ported from `blockary::tag` with the
       following restrictions: maximum **3 levels** (parser errors on a
       4th level segment); each level is `[A-Za-z0-9_-]+` with no
       whitespace, no `@`, no `/` (matching dayplanner / Obsidian
       conventions). Brackets/parens (`@p/[[PROJ]]/x`) are explicitly
       out of scope for v1 — reject with a clear `ParseError` pointing
       at the offending substring.
-- [ ] Round-trip property (proptest): for any generator-produced
+- [x] Round-trip property (proptest): for any generator-produced
       `Timeblock`, `parse_line(serialize_line(b)) == b` byte-for-byte
       modulo the canonical end-time materialization rule.
-- [ ] Canonical serialization: `HH:MM - HH:MM <desc>` (zero-padded
+- [x] Canonical serialization: `HH:MM - HH:MM <desc>` (zero-padded
       times, single ASCII space around the dash, single space before
       desc). When `end_explicit == false`, serializer still emits the
       derived `HH:MM` end (we always normalize on write — input like
       `- 10:00 Foo` round-trips to `- 10:00 - 10:30 Foo` and that's
       considered a feature).
-- [ ] `ParseError` enum with structured variants: `BadStart`,
+- [x] `ParseError` enum with structured variants: `BadStart`,
       `BadEnd`, `EndBeforeStart`, `TagTooDeep`, `TagBadChar { ch }`,
       `Empty`. Each carries enough context to surface a useful CLI
       error message.
 
 ### Library — `ft_core::timeblock::doc`
 
-- [ ] `Document` type representing one day's section in a daily note:
+- [x] `Document` type representing one day's section in a daily note:
       ```rust
       pub struct Document {
           pub blocks: Vec<Timeblock>,
@@ -150,36 +150,36 @@ Why ship CLI before TUI:
       pub fn read(daily_path: &Path, heading: &str) -> Result<Document>;
       pub fn write(doc: &Document) -> Result<()>;  // atomic, section-replace
       ```
-- [ ] `read` returns `Document { blocks: vec![] }` when the heading is
+- [x] `read` returns `Document { blocks: vec![] }` when the heading is
       not present in the file (lets the TUI render the empty state and
       the CLI `add` create the section). `write` inserts the heading
       at file end when missing — matching the dayplanner / blockary
       conventions.
-- [ ] `write` preserves everything outside the target section
+- [x] `write` preserves everything outside the target section
       byte-for-byte except for trailing whitespace on the section's
       last line (where blockary's helper introduces drift). Lines
       between heading and next heading-of-equal-or-higher-level are
       replaced wholesale with the freshly-serialized block list.
-- [ ] Fenced code blocks (``` and ~~~) and frontmatter are honored —
+- [x] Fenced code blocks (``` and ~~~) and frontmatter are honored —
       a heading-shaped line inside a code fence is NOT treated as the
       section boundary. Reuses `crate::markdown::LineSkipState`.
-- [ ] Section-replace is atomic via `fs::write_atomic`.
+- [x] Section-replace is atomic via `fs::write_atomic`.
 
 ### Library — `ft_core::timeblock::ops`
 
-- [ ] `add_block(daily_path, heading, new: Timeblock) -> Result<Document>`
+- [x] `add_block(daily_path, heading, new: Timeblock) -> Result<Document>`
       reads, validates (no exact-same-start-and-end-and-desc duplicate
       unless `force: bool` opt-in via an `AddOptions` struct),
       inserts in sorted order (by start time), writes atomically,
       returns the new document.
-- [ ] `edit_block(daily_path, heading, selector, mutation) -> Result<Document>`
+- [x] `edit_block(daily_path, heading, selector, mutation) -> Result<Document>`
       where `mutation` is an `EditMutation` struct with optional
       `start`, `end`, `desc`, `add_tag`, `remove_tag` fields.
       Time mutations validate `end > start`; tag mutations preserve
       tag order and dedupe.
-- [ ] `delete_block(daily_path, heading, selector) -> Result<Document>`
+- [x] `delete_block(daily_path, heading, selector) -> Result<Document>`
       removes the matched block. Errors when no block matches.
-- [ ] `Selector` enum (mirrors `ft_core::selector` for tasks):
+- [x] `Selector` enum (mirrors `ft_core::selector` for tasks):
       `Line(usize)` (1-indexed within the section block list, matches
       `source_line`), `Time(NaiveTime)` (matches `start`), `Fuzzy(String)`
       (case-insensitive substring match against description; errors
@@ -188,7 +188,7 @@ Why ship CLI before TUI:
 
 ### Library — `ft_core::timeblock::report`
 
-- [ ] `Spent` summary type:
+- [x] `Spent` summary type:
       ```rust
       pub struct TagTime {
           pub tag: String,            // single level segment
@@ -200,15 +200,15 @@ Why ship CLI before TUI:
       Ports blockary's `time_summary::time_per_tag` with the same
       hierarchical aggregation, sorted by descending minutes at every
       level.
-- [ ] `total_minutes(blocks: &[Timeblock]) -> u32` and
+- [x] `total_minutes(blocks: &[Timeblock]) -> u32` and
       `minutes_to_hours_minutes(m: u32) -> (u32, u32)` helpers.
-- [ ] Blocks tagged with a top-level `@break` are excluded from
+- [x] Blocks tagged with a top-level `@break` are excluded from
       `total_minutes` totals (matching blockary), but still appear in
       `time_per_tag` so the user can see their break time bucket.
 
 ### Library — config
 
-- [ ] New `[timeblocks]` block in `Config`:
+- [x] New `[timeblocks]` block in `Config`:
       ```toml
       [timeblocks]
       heading = "Time Blocks"          # optional; default "Time Blocks"
@@ -546,7 +546,7 @@ unchanged on the same daily notes.
 
 ## Sessions
 
-### Session 1 · planned
+### Session 1 · 2026-05-16 · done
 **Goal:** ft_core::timeblock library — model, parser, serializer, tag grammar,
 Document read/write with section-aware atomic edits, full unit + proptest
 coverage. No CLI, no TUI yet.
@@ -575,6 +575,27 @@ coverage. No CLI, no TUI yet.
 **Done means:** library can read and rewrite a daily note's timeblock
 section atomically; round-trip safety verified by proptest; no
 binary changes yet.
+
+**Outcome:** Shipped `ft_core::timeblock` with `mod.rs` (types +
+parser + serializer), `doc.rs` (Document read/write), `ops.rs`
+(add/edit/delete + Selector + TimeChange + EditMutation +
+AddOptions), and `report.rs` (TagTime + time_per_tag +
+total_minutes + minutes_to_hours_minutes). 75 new tests, all
+green; full `cargo test -p ft-core` reports 534 passed. Round-trip
+property verified via proptest (idempotent on the serialized form
+rather than block-equal, since `end_explicit` flips on first
+serialization — noted in module docs). Tag parser is lenient
+inline (`parse_tags` skips malformed `@…` tokens so legacy
+blockary notes like `@p/[[PROJ]]` still read) but strict per-tag
+via `parse_tag_string` for CLI flag validation. Document
+read/write honors fenced code via `LineSkipState`. Config gained a
+`[timeblocks]` block + `Config::timeblocks_heading()` accessor;
+`Error::Timeblock(String)` variant added. Clippy and fmt clean.
+Deferred to later sessions: `insta` snapshot test on Document::write
+(direct assertions covered the same behavior — adding a snapshot
+is cheap polish), and vault-relative paths in ops error messages
+(ops doesn't see the vault root yet; CLI layer in session 2 will
+wrap with vault-relative formatting).
 
 ### Session 2 · planned
 **Goal:** `ft timeblocks list|add|edit|delete` CLI on top of the

@@ -26,6 +26,9 @@ pub enum Error {
 
     #[error("git: {0}")]
     Git(String),
+
+    #[error("timeblock: {0}")]
+    Timeblock(String),
 }
 
 pub type Result<T> = std::result::Result<T, Error>;
