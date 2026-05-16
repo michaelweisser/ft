@@ -628,6 +628,42 @@ fn timeblocks_tab_form_capital_a_commits_on_desc_enter() -> Result<()> {
 }
 
 #[test]
+fn timeblocks_tab_time_chord_keeps_selection_on_non_first_block() -> Result<()> {
+    // Regression: with two blocks, selecting the second and then hitting
+    // any time-adjust chord must NOT jump the cursor back to the first
+    // block. (Pre-fix, `reload` reset selection to 0 on every refresh.)
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 first\n- 10:00 - 11:00 second\n",
+    );
+    let vault_path = vault.path.clone();
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Move down to select the second block, then extend its end by 5m
+    // three times — each `]` should leave the cursor on "second".
+    app.dispatch(key('j'))?;
+    for _ in 0..3 {
+        app.dispatch(key(']'))?;
+        app.service_pending_for_test()?;
+    }
+    let body = std::fs::read_to_string(vault_path.join("journal/2026-05-10.md")).unwrap();
+    // First block unchanged, second block's end shifted by 3*5 = 15m.
+    assert!(body.contains("- 09:00 - 10:00 first"), "got: {body}");
+    assert!(body.contains("- 10:00 - 11:15 second"), "got: {body}");
+    // And the highlight (▶) should be next to "second", not "first".
+    let frame = render(&mut app, 100, 24);
+    assert!(
+        frame
+            .lines()
+            .any(|l| l.contains("▶") && l.contains("second")),
+        "selection should still be on second: {frame}"
+    );
+    Ok(())
+}
+
+#[test]
 fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let (_dir, vault) = timeblocks_vault_with_template();
     let vault_path = vault.path.clone();

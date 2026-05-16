@@ -156,12 +156,23 @@ impl TimeblocksTab {
     }
 
     /// Re-read both days from disk. Called from `on_focus` and `r`.
+    ///
+    /// Preserves each pane's selection *index*. That's the right policy
+    /// for the read-only refresh path (`r` on a file that didn't change
+    /// keeps the cursor where it was, on a file that did change the
+    /// clamp falls back to the last block). Mutation chords that move
+    /// a block's start time (which can re-sort the list) re-anchor by
+    /// start time via [`Self::select_by_start`] after this call.
     fn reload(&mut self, ctx: &mut TabCtx) {
         self.heading = ctx.vault.config.config.timeblocks_heading().to_string();
         let today = ctx.today;
         let tomorrow = today + chrono::Duration::days(1);
+        let prev_today_sel = self.today.selection;
+        let prev_tomorrow_sel = self.tomorrow.selection;
         self.today = self.load_pane(ctx, today);
         self.tomorrow = self.load_pane(ctx, tomorrow);
+        self.today.selection = prev_today_sel;
+        self.tomorrow.selection = prev_tomorrow_sel;
         self.clamp_selection();
     }
 
@@ -202,6 +213,18 @@ impl TimeblocksTab {
                     selection: 0,
                 }
             }
+        }
+    }
+
+    /// After a mutation that changes a block's start time, the
+    /// post-sort index of "the block I just edited" may differ from
+    /// the pre-mutation index. This helper finds the block whose start
+    /// matches `start` and sets the focused-pane selection to its
+    /// index, so the cursor follows the user's intent through the sort.
+    fn select_by_start(&mut self, pane: Pane, start: NaiveTime) {
+        let p = self.pane_mut(pane);
+        if let Some(idx) = p.blocks.iter().position(|b| b.start == start) {
+            p.selection = idx;
         }
     }
 
@@ -324,6 +347,7 @@ impl TimeblocksTab {
             Pane::Tomorrow => &self.tomorrow,
         };
         let block = &p.blocks[idx];
+        let old_start = block.start;
         let mutation = if on_end {
             EditMutation {
                 end: Some(TimeChange::ShiftMinutes(shift_minutes)),
@@ -335,10 +359,21 @@ impl TimeblocksTab {
                 ..Default::default()
             }
         };
-        let selector = Selector::Time(block.start);
+        let selector = Selector::Time(old_start);
         match ops::edit_block(&path, &self.heading, &selector, mutation) {
             Ok(_) => {
                 self.reload(ctx);
+                // End-shift leaves the start unchanged, so the (now
+                // preserved) selection index already points at the same
+                // block. A start-shift can move the block in the sorted
+                // list — re-anchor by the new start time so the cursor
+                // tracks the user's intent across the re-sort.
+                let new_start = if on_end {
+                    old_start
+                } else {
+                    shift_clamped(old_start, shift_minutes)
+                };
+                self.select_by_start(pane, new_start);
             }
             Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
         }
@@ -470,6 +505,13 @@ impl TimeblocksTab {
                     ),
                     ToastStyle::Success,
                 );
+                // Aim the cursor at the block that took the deleted
+                // one's slot. `reload` preserves the index and
+                // `clamp_selection` brings it down when we removed the
+                // tail — but pinning it here also handles the case
+                // where `block_idx` happens to be 0 (no clamp needed
+                // but we'd otherwise stay at 0 anyway).
+                self.pane_mut(pane).selection = block_idx;
                 self.reload(ctx);
             }
             Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
@@ -550,11 +592,16 @@ impl TimeblocksTab {
             queue_toast(ctx, &format!("{e}"), ToastStyle::Error);
             return;
         }
+        let new_start = block.start;
         match ops::add_block(&path, &self.heading, block, AddOptions::default()) {
             Ok(_) => {
                 self.mode = Mode::Idle;
                 queue_toast(ctx, &summary, ToastStyle::Success);
                 self.reload(ctx);
+                // Pin the cursor to the freshly added block so the next
+                // chord (`]`, `[`, `e`, …) operates on what the user
+                // just typed, rather than wherever they last navigated.
+                self.select_by_start(pane, new_start);
             }
             Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
         }
@@ -695,6 +742,11 @@ impl TimeblocksTab {
             Ok(_) => {
                 self.mode = Mode::Idle;
                 self.reload(ctx);
+                // Desc edits don't touch the block's start time, but
+                // anchor by start anyway to make the invariant — "the
+                // block you just edited stays selected" — uniform across
+                // every mutation chord.
+                self.select_by_start(pane, target.start);
             }
             Err(e) => queue_toast(ctx, &format!("{e}"), ToastStyle::Error),
         }
@@ -815,6 +867,17 @@ fn form_buf_mut(s: &mut FormState) -> &mut EditBuffer {
 
 fn fmt_hhmm(t: NaiveTime) -> String {
     format!("{:02}:{:02}", t.hour(), t.minute())
+}
+
+/// Apply the same `±N`-minute shift the library performs on
+/// [`TimeChange::ShiftMinutes`], clamping at `00:00` and `23:59` so the
+/// "expected new start" computed by the TUI matches what
+/// `ops::edit_block` will have written. Kept in sync with
+/// `ft_core::timeblock::ops::apply_change`.
+fn shift_clamped(t: NaiveTime, delta: i32) -> NaiveTime {
+    let cur = (t.hour() as i32) * 60 + (t.minute() as i32);
+    let new = (cur + delta).clamp(0, 23 * 60 + 59);
+    NaiveTime::from_hms_opt((new / 60) as u32, (new % 60) as u32, 0).unwrap()
 }
 
 fn queue_toast(ctx: &TabCtx, text: &str, style: ToastStyle) {
