@@ -15,6 +15,10 @@
 //! - `>` / `<` — shift the whole block later / earlier (start + end
 //!   move together, duration preserved).
 //!
+//! `f` toggles between split (today + tomorrow) and single-day
+//! full-width view. In single-day mode, `h`/`l` flip which day is
+//! shown (same key that shifts focus in split mode).
+//!
 //! Mutations land in session 5 — this session is read-only, so the tab
 //! never writes to disk.
 
@@ -126,12 +130,26 @@ pub(crate) struct FormState {
     pub focus: FormField,
 }
 
+/// How the main viewport is laid out.
+///
+/// `Split` (default) shows today and tomorrow side-by-side. `Single`
+/// gives the focused pane the full width — handy for working through a
+/// busy day. `f` toggles between the two; in `Single` mode, `h`/`l`
+/// swap which day is shown (in `Split` mode they shift focus between
+/// the two panes that are already on screen).
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub(crate) enum ViewMode {
+    Split,
+    Single,
+}
+
 pub struct TimeblocksTab {
     pub(crate) clock: ClockFn,
     pub(crate) today: PaneState,
     pub(crate) tomorrow: PaneState,
     pub(crate) focus: Pane,
     pub(crate) mode: Mode,
+    pub(crate) view: ViewMode,
     /// Heading the panes were last loaded under. Refresh is cheap so we
     /// could read this from `ctx.vault.config` every render, but caching
     /// it removes an allocation on the hot path.
@@ -156,6 +174,7 @@ impl TimeblocksTab {
             tomorrow: PaneState::empty(now + chrono::Duration::days(1)),
             focus: Pane::Today,
             mode: Mode::Idle,
+            view: ViewMode::Split,
             heading: "Time Blocks".into(),
             last_error: None,
         }
@@ -1050,6 +1069,13 @@ impl Tab for TimeblocksTab {
                 }
                 KeyCode::Char('<') => {
                     self.shift_block(ctx, -5);
+                    return Ok(EventOutcome::Consumed);
+                }
+                KeyCode::Char('f') => {
+                    self.view = match self.view {
+                        ViewMode::Split => ViewMode::Single,
+                        ViewMode::Single => ViewMode::Split,
+                    };
                     return Ok(EventOutcome::Consumed);
                 }
                 _ => {}

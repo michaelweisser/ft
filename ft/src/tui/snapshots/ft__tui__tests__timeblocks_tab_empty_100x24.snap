@@ -14,7 +14,7 @@ expression: frame
 │                      ││                                    ││                                    │
 │ ── focus ──          ││                                    ││                                    │
 │ ▶ today              ││                                    ││                                    │
-│                      ││                                    ││                                    │
+│ view: split          ││                                    ││                                    │
 │                      ││                                    ││                                    │
 │                      ││                                    ││                                    │
 │                      ││                                    ││                                    │

@@ -789,6 +789,72 @@ fn timeblocks_tab_equal_start_blocks_are_editable() -> Result<()> {
 }
 
 #[test]
+fn timeblocks_tab_f_toggles_to_single_day_view() -> Result<()> {
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(
+        &vault,
+        "2026-05-10",
+        "## Time Blocks\n- 09:00 - 10:00 today-a\n",
+    );
+    seed_day(
+        &vault,
+        "2026-05-11",
+        "## Time Blocks\n- 09:00 - 10:00 tomorrow-a\n",
+    );
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    // Split: both visible.
+    let split = render(&mut app, 100, 24);
+    assert!(split.contains("today-a"));
+    assert!(split.contains("tomorrow-a"));
+    assert!(split.contains("view: split"));
+    // Toggle to single-day. Tomorrow's row should disappear; focus is
+    // on Today so only today's block remains.
+    app.dispatch(key('f'))?;
+    let single = render(&mut app, 100, 24);
+    assert!(single.contains("today-a"));
+    assert!(!single.contains("tomorrow-a"), "got: {single}");
+    assert!(single.contains("view: single"));
+    // `l` flips focus → in single mode, that flips which day is shown.
+    app.dispatch(key('l'))?;
+    let after_l = render(&mut app, 100, 24);
+    assert!(after_l.contains("tomorrow-a"));
+    assert!(!after_l.contains("today-a"), "got: {after_l}");
+    // `f` again returns to split.
+    app.dispatch(key('f'))?;
+    let split_again = render(&mut app, 100, 24);
+    assert!(split_again.contains("today-a"));
+    assert!(split_again.contains("tomorrow-a"));
+    Ok(())
+}
+
+#[test]
+fn timeblocks_tab_form_cursor_lands_after_visible_prefix() -> Result<()> {
+    // Regression: the `A` modal placed the cursor two cells past the
+    // actual end of the prefix because `▸` was 2 cells wide in some
+    // fonts and the hardcoded offset was off by one. The prefix is now
+    // ASCII (`> start `) and the offset is derived from `chars().count()`.
+    let (_dir, vault) = timeblocks_vault();
+    seed_day(&vault, "2026-05-10", "## Time Blocks\n");
+    let mut app = App::for_test_with_clock(vault, fixed_clock);
+    app.switch_to(3)?;
+    app.dispatch(Event::Key(KeyEvent::new(
+        KeyCode::Char('A'),
+        KeyModifiers::SHIFT,
+    )))?;
+    let frame = render(&mut app, 100, 24);
+    assert!(frame.contains("> start"), "ASCII prefix expected: {frame}");
+    assert!(!frame.contains("▸ start"));
+    // Typing extends the buffer, character lands at the cursor position.
+    app.dispatch(key('X'))?;
+    let frame = render(&mut app, 100, 24);
+    // Default Start ("14:30" snapped from fixed clock) gains a trailing
+    // "X". Confirms the cursor sat at end-of-text, not mid-prefix.
+    assert!(frame.contains("14:30X"), "got: {frame}");
+    Ok(())
+}
+
+#[test]
 fn timeblocks_tab_c_creates_daily_via_template() -> Result<()> {
     let (_dir, vault) = timeblocks_vault_with_template();
     let vault_path = vault.path.clone();

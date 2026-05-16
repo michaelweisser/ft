@@ -13,7 +13,7 @@ use ratatui::{
 use crate::tui::tab::TabCtx;
 use ratatui::widgets::Clear;
 
-use super::{FormField, Mode, Pane, TimeblocksTab, SIDEBAR_WIDTH};
+use super::{FormField, Mode, Pane, TimeblocksTab, ViewMode, SIDEBAR_WIDTH};
 
 pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, _ctx: &TabCtx) {
     // Split off a single-row quickline strip from the bottom when the
@@ -38,13 +38,21 @@ pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, _ct
 
     render_sidebar(tab, frame, chunks[0]);
 
-    let panes = Layout::default()
-        .direction(Direction::Horizontal)
-        .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
-        .split(chunks[1]);
-
-    render_pane(tab, frame, panes[0], Pane::Today);
-    render_pane(tab, frame, panes[1], Pane::Tomorrow);
+    match tab.view {
+        ViewMode::Split => {
+            let panes = Layout::default()
+                .direction(Direction::Horizontal)
+                .constraints([Constraint::Percentage(50), Constraint::Percentage(50)])
+                .split(chunks[1]);
+            render_pane(tab, frame, panes[0], Pane::Today);
+            render_pane(tab, frame, panes[1], Pane::Tomorrow);
+        }
+        ViewMode::Single => {
+            // Full-width single pane shows whichever day currently has
+            // focus. `h`/`l` flip focus → flips which day is on screen.
+            render_pane(tab, frame, chunks[1], tab.focus);
+        }
+    }
 
     if let Mode::Form(_) = &tab.mode {
         render_form_modal(tab, frame, area);
@@ -52,9 +60,11 @@ pub(super) fn render(tab: &mut TimeblocksTab, frame: &mut Frame, area: Rect, _ct
 }
 
 fn render_quickline_strip(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
+    // ASCII-only prefixes so `chars().count()` matches the rendered
+    // cell count (see the form-modal fix for the same reason).
     let (prefix, text, cursor) = match &tab.mode {
         Mode::Quickline(buf) => (" + ", buf.text.as_str(), buf.cursor),
-        Mode::EditDesc { buf, .. } => (" edit desc ▸ ", buf.text.as_str(), buf.cursor),
+        Mode::EditDesc { buf, .. } => (" edit desc > ", buf.text.as_str(), buf.cursor),
         _ => return,
     };
     let line = Line::from(vec![
@@ -63,7 +73,6 @@ fn render_quickline_strip(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
     ]);
     let para = Paragraph::new(line);
     frame.render_widget(para, area);
-    // Place the cursor immediately after `prefix + chars[..cursor]`.
     let col = area.x + (prefix.chars().count() as u16) + (cursor as u16);
     let col = col.min(area.x + area.width.saturating_sub(1));
     frame.set_cursor_position((col, area.y));
@@ -100,8 +109,14 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         ])
         .split(inner);
 
+    // ASCII prefix so cursor positioning matches what the terminal
+    // actually renders (the previous `▸` glyph was 2 cells wide in some
+    // fonts, throwing the cursor offset off by one cell).
+    let prefix_for = |label: &str, focused: bool| -> String {
+        let marker = if focused { '>' } else { ' ' };
+        format!("{marker} {label:<6}")
+    };
     let row = |label: &str, buf_text: &str, focused: bool| -> Paragraph<'_> {
-        let arrow = if focused { "▸" } else { " " };
         let style = if focused {
             Style::default()
                 .fg(Color::Cyan)
@@ -110,7 +125,7 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
             Style::default().fg(Color::White)
         };
         Paragraph::new(Line::from(vec![
-            Span::styled(format!("{arrow} {label:<6}"), style),
+            Span::styled(prefix_for(label, focused), style),
             Span::raw(buf_text.to_string()),
         ]))
     };
@@ -130,14 +145,15 @@ fn render_form_modal(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         rows[4],
     );
 
-    // Position the cursor inside whichever buffer has focus. Layout: at
-    // column inner.x + 9 (arrow + space + label + space) + cursor offset.
-    let (buf_cursor, row_idx) = match state.focus {
-        FormField::Start => (state.start.cursor, 0),
-        FormField::End => (state.end.cursor, 1),
-        FormField::Desc => (state.desc.cursor, 2),
+    // Cursor offset = the focused row's actual prefix width. ASCII-only
+    // so `chars().count()` equals the rendered cell count.
+    let (buf_cursor, row_idx, label) = match state.focus {
+        FormField::Start => (state.start.cursor, 0, "start"),
+        FormField::End => (state.end.cursor, 1, "end"),
+        FormField::Desc => (state.desc.cursor, 2, "desc"),
     };
-    let col = rows[row_idx].x + 9 + buf_cursor as u16;
+    let prefix_width = prefix_for(label, true).chars().count() as u16;
+    let col = rows[row_idx].x + prefix_width + buf_cursor as u16;
     let col = col.min(rows[row_idx].x + rows[row_idx].width.saturating_sub(1));
     frame.set_cursor_position((col, rows[row_idx].y));
 }
@@ -199,6 +215,15 @@ fn render_sidebar(tab: &TimeblocksTab, frame: &mut Frame, area: Rect) {
         Style::default()
             .fg(Color::Cyan)
             .add_modifier(Modifier::BOLD),
+    )));
+    // Show the view mode so users have a visible cue that `f` is doing
+    // something — split vs single-day full-width.
+    lines.push(Line::from(Span::styled(
+        match tab.view {
+            ViewMode::Split => " view: split",
+            ViewMode::Single => " view: single (f)",
+        },
+        Style::default().fg(Color::DarkGray),
     )));
     if matches!(tab.mode, Mode::DeleteConfirm { .. }) {
         lines.push(Line::from(""));
